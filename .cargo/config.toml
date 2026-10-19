@@ -2,3 +2,7 @@
 # natively in the aarch64 build machine; on a Mac this section doesn't apply.
 [target.aarch64-unknown-linux-gnu]
 rustflags = ["-C", "target-cpu=cortex-a55"]
+
+# Trying inkdot out on an Apple silicon Mac: SDL2 from Homebrew (`brew install sdl2-compat`).
+[target.aarch64-apple-darwin]
+rustflags = ["-L", "/opt/homebrew/lib"]

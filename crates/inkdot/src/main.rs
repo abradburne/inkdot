@@ -7,6 +7,7 @@ mod input;
 mod looks;
 mod options;
 mod pacing;
+mod perf;
 mod rom;
 mod saves;
 mod ui;
@@ -52,6 +53,42 @@ const AUDIO_TARGET: u32 = 1200;
 /// The bottom screen dims (or goes off) after this long untouched in play.
 const IDLE: Duration = Duration::from_secs(10);
 
+/// INKDOT_DEBUG: `stats` logs pacing and sound every five seconds; `shot=DIR` saves both
+/// screens as PNG files there ten seconds in. For checking a build on the handheld.
+#[derive(Clone, Debug, Default)]
+struct Debug {
+    stats: bool,
+    shot: Option<PathBuf>,
+}
+
+impl Debug {
+    fn from_env() -> Debug {
+        let mut d = Debug::default();
+        for part in std::env::var("INKDOT_DEBUG").unwrap_or_default().split(',') {
+            match part.split_once('=') {
+                Some(("shot", dir)) => d.shot = Some(PathBuf::from(dir)),
+                _ if part == "stats" => d.stats = true,
+                _ => {}
+            }
+        }
+        d
+    }
+}
+
+/// Counts for INKDOT_DEBUG=stats.
+#[derive(Clone, Debug, Default)]
+struct Stats {
+    frames: u64,
+    missed: u64,
+    last_vblank: Option<Duration>,
+    since: Option<Instant>,
+    /// The worst times seen for running the game, drawing and showing the top screen, and
+    /// the bottom screen.
+    emulate: Duration,
+    present: Duration,
+    bottom: Duration,
+}
+
 /// What the bottom screen's backlight is doing.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Backlight {
@@ -90,6 +127,9 @@ struct App {
     quit: bool,
     /// Exact-speed timing: when the run started and how many frames it has made.
     exact_start: Option<(Instant, u64)>,
+    debug: Debug,
+    stats: Stats,
+    frame_count: u64,
 }
 
 fn main() {
@@ -113,6 +153,12 @@ fn main() {
 
 fn run(args: args::Args) -> Result<(), String> {
     watch_sigterm();
+    // Half a core's capacity keeps a frame to a few milliseconds (perf.rs).
+    if !perf::clamp_min(50) {
+        eprintln!(
+            "inkdot: no utilization clamp (kernel without uclamp): schedutil decides the clock"
+        );
+    }
     let (rom, _) = rom::load(&args.rom)?;
     let stem = args
         .rom
@@ -211,6 +257,9 @@ fn run(args: args::Args) -> Result<(), String> {
         toast_until: None,
         quit: false,
         exact_start: None,
+        debug: Debug::from_env(),
+        stats: Stats::default(),
+        frame_count: 0,
     };
     app.apply_look();
     // Resume where the game was left, unless told not to.
@@ -231,6 +280,7 @@ fn run(args: args::Args) -> Result<(), String> {
         // for a frame: the buttons are read as late as they can be.
         if let Some(v) = &vblank {
             if let Ok(at) = v.wait(Screen::Top) {
+                app.vblank_stats(at);
                 app.pacer.vblank(at);
                 if let Some(start) = app.pacer.next_start() {
                     sleep_until(start);
@@ -589,6 +639,7 @@ impl App {
     fn frame(&mut self) {
         let paused = self.ui.menu;
         let fast = self.fast || self.controls.fast_held();
+        let t0 = Instant::now();
         if !paused {
             self.gb.set_buttons(self.controls.game_buttons());
             let frames = if fast {
@@ -619,10 +670,16 @@ impl App {
                 self.battery_dirty = Some(Instant::now());
             }
         }
+        let t1 = Instant::now();
         self.convert_frame();
         self.video.upload_frame(&self.rgba);
         let look = self.lcd_look();
-        self.video.present_top(look);
+        self.frame_count += 1;
+        let shoot = self.debug.shot.is_some() && self.frame_count == 600;
+        if let Some(px) = self.video.present_top(look, shoot) {
+            self.save_shots(&px);
+        }
+        let t2 = Instant::now();
 
         // Battery RAM a second after the game last started writing it.
         if self
@@ -648,6 +705,61 @@ impl App {
             self.video.upload_ui(&px);
             self.video.present_bottom();
         }
+        let s = &mut self.stats;
+        s.emulate = s.emulate.max(t1 - t0);
+        s.present = s.present.max(t2 - t1);
+        s.bottom = s.bottom.max(t2.elapsed());
+    }
+
+    /// INKDOT_DEBUG=stats: frames, missed vblanks, the panel's period, the frame budget, the
+    /// sound queue and rate, every five seconds.
+    fn vblank_stats(&mut self, at: Duration) {
+        if !self.debug.stats {
+            return;
+        }
+        let s = &mut self.stats;
+        if let Some(last) = s.last_vblank {
+            let gap = (at - last).as_secs_f64() / self.pacer.period().as_secs_f64();
+            if gap > 1.5 {
+                s.missed += gap.round() as u64 - 1;
+            }
+        }
+        s.last_vblank = Some(at);
+        s.frames += 1;
+        let since = *s.since.get_or_insert_with(Instant::now);
+        if since.elapsed() >= Duration::from_secs(5) {
+            let queued = self.audio.as_ref().map_or(0, |q| q.size() / 4);
+            let ms = |d: Duration| d.as_secs_f64() * 1000.0;
+            eprintln!(
+                "inkdot: {} frames, {} vblanks missed, worst emulate {:.2} present {:.2} bottom {:.2} ms, period {:.4} ms, budget {:.2} ms, sound queue {} frames at {:.1} Hz",
+                s.frames,
+                s.missed,
+                ms(s.emulate),
+                ms(s.present),
+                ms(s.bottom),
+                self.pacer.period().as_secs_f64() * 1000.0,
+                self.pacer.budget().as_secs_f64() * 1000.0,
+                queued,
+                self.gb.hw.apu.synth().rate(),
+            );
+            *s = Stats {
+                last_vblank: s.last_vblank,
+                ..Stats::default()
+            };
+        }
+    }
+
+    fn save_shots(&mut self, top: &[u8]) {
+        let Some(dir) = &self.debug.shot else { return };
+        let _ = std::fs::create_dir_all(dir);
+        let (w, h) = self.video.top_size();
+        write_png(&dir.join("top.png"), top, w, h);
+        self.ui.touch_up();
+        if let Some(px) = self.ui.render(&self.model) {
+            write_png(&dir.join("bottom.png"), px, ui::W as u32, ui::H as u32);
+        }
+        self.ui.touch_up();
+        eprintln!("inkdot: screens saved in {}", dir.display());
     }
 
     fn exact_frames_due(&mut self) -> u64 {
@@ -788,6 +900,17 @@ fn encode_png(rgba: &[u8]) -> Vec<u8> {
         }
     }
     out
+}
+
+fn write_png(path: &Path, rgba: &[u8], w: u32, h: u32) {
+    let Ok(file) = std::fs::File::create(path) else {
+        return;
+    };
+    let mut enc = png::Encoder::new(std::io::BufWriter::new(file), w, h);
+    enc.set_color(png::ColorType::Rgba);
+    if let Ok(mut out) = enc.write_header() {
+        let _ = out.write_image_data(rgba);
+    }
 }
 
 fn decode_png(data: &[u8]) -> Option<Vec<u8>> {

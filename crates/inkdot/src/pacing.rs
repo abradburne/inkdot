@@ -42,6 +42,11 @@ impl Pacer {
         }
     }
 
+    /// The panel's period as measured.
+    pub fn period(&self) -> Duration {
+        self.period
+    }
+
     /// A vblank happened at `at` (monotonic time).
     pub fn vblank(&mut self, at: Duration) {
         if let Some(last) = self.last_vblank {

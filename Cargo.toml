@@ -30,3 +30,9 @@ lto = true
 codegen-units = 1
 panic = "abort"
 strip = true
+
+# Release with symbols, for profilers: cargo build --profile profiling.
+[profile.profiling]
+inherits = "release"
+strip = false
+debug = 1

@@ -340,8 +340,9 @@ impl Video {
         unsafe { self.gl.viewport(v.0, v.1, v.2, v.3) };
     }
 
-    /// Draws the game on the top screen and shows it at the next refresh.
-    pub fn present_top(&mut self, look: LcdLook) {
+    /// Draws the game on the top screen and shows it at the next refresh; with `capture`, also
+    /// returns what was drawn (RGBA, rows top first), for INKDOT_DEBUG=shot.
+    pub fn present_top(&mut self, look: LcdLook, capture: bool) -> Option<Vec<u8>> {
         self.top.window.gl_make_current(&self._context).ok();
         self.viewport(self.top.viewport);
         let gl = &self.gl;
@@ -384,11 +385,42 @@ impl Video {
             gl.uniform_3_f32(u("gap").as_ref(), g[0], g[1], g[2]);
         }
         self.draw_quad(self.game, Self::clip((GAME_X, GAME_Y, GAME_W, GAME_H)));
+        let shot = capture.then(|| self.read_back(self.top.viewport));
         if self.desktop {
             // The bottom screen goes in the same window, below.
             self.draw_ui_at((0, 0, self.top.viewport.2, self.top.viewport.3));
         }
         self.top.window.gl_swap_window();
+        shot
+    }
+
+    /// The pixels of a viewport, top row first.
+    fn read_back(&self, v: (i32, i32, i32, i32)) -> Vec<u8> {
+        let mut px = vec![0u8; (v.2 * v.3 * 4) as usize];
+        // SAFETY: reads the current framebuffer into a buffer of exactly w*h*4 bytes.
+        unsafe {
+            self.gl.read_pixels(
+                v.0,
+                v.1,
+                v.2,
+                v.3,
+                glow::RGBA,
+                glow::UNSIGNED_BYTE,
+                glow::PixelPackData::Slice(&mut px),
+            );
+        }
+        // GL's rows go bottom up.
+        let row = (v.2 * 4) as usize;
+        let mut flipped = Vec::with_capacity(px.len());
+        for r in px.chunks(row).rev() {
+            flipped.extend_from_slice(r);
+        }
+        flipped
+    }
+
+    /// The size of the top screen's drawing area, for a capture.
+    pub fn top_size(&self) -> (u32, u32) {
+        (self.top.viewport.2 as u32, self.top.viewport.3 as u32)
     }
 
     fn draw_ui_at(&self, viewport: (i32, i32, i32, i32)) {

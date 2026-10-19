@@ -164,6 +164,14 @@ pub struct Ppu {
     discard: u8,
     /// Dots of object fetching still to wait.
     stall: u8,
+    /// This line's pixel transfer is on the fast path: nothing it depends on has changed
+    /// since it began, so it is drawn in one pass when it ends (`fast_len` dots in), with the
+    /// window from pixel `fast_window` if it starts mid-line.
+    fast: bool,
+    fast_len: u16,
+    fast_window: Option<u8>,
+    /// Always run the pixel FIFO, never the fast path (for tests that compare the two).
+    pub fifo_only: bool,
     /// The background FIFO: two bit planes shifting out from bit 7, all pixels of one tile.
     bg_lo: u8,
     bg_hi: u8,
@@ -232,6 +240,10 @@ impl Ppu {
             lx: 0,
             discard: 0,
             stall: 0,
+            fast: false,
+            fast_len: 0,
+            fast_window: None,
+            fifo_only: false,
             bg_lo: 0,
             bg_hi: 0,
             bg_len: 0,
@@ -369,6 +381,7 @@ impl Ppu {
 
     /// A VRAM write by the CGB's VRAM DMA, into the bank VBK selects.
     pub fn dma_write_vram(&mut self, addr: u16, v: u8) {
+        self.leave_fast_path();
         self.vram[(self.vbk as usize) << 13 | (addr as usize & 0x1fff)] = v;
     }
 
@@ -416,6 +429,13 @@ impl Ppu {
 
     /// Writes a PPU register. Returns any events the write raises (a STAT interrupt).
     pub fn write(&mut self, addr: u16, v: u8) -> u8 {
+        // What the line being drawn depends on: the FIFO takes over before it changes.
+        if matches!(
+            addr,
+            0xff40 | 0xff42 | 0xff43 | 0xff47..=0xff49 | 0xff4b | 0xff6c
+        ) {
+            self.leave_fast_path();
+        }
         match addr {
             0xff40 => {
                 let was_on = self.lcd_on();
@@ -520,22 +540,55 @@ impl Ppu {
         self.vram_write_lock = false;
     }
 
-    /// Runs `dots` dots, returning the [`event`]s raised.
+    /// Runs `dots` dots, returning the [`event`]s raised. Runs of dots in which nothing can
+    /// happen (see [`Ppu::idle_dots`]) are counted off at once.
     pub fn tick(&mut self, dots: u32) -> u8 {
         let mut ev = 0;
         if !self.lcd_on() {
             return 0;
         }
-        for _ in 0..dots {
-            ev |= self.step();
+        let mut left = dots as u16;
+        while left > 0 {
+            let idle = self.idle_dots().min(left);
+            if idle > 0 {
+                self.dot += idle;
+                left -= idle;
+            } else {
+                ev |= self.step();
+                left -= 1;
+            }
         }
         ev
     }
 
+    /// How many of the coming dots do nothing at all: no scheduled event, no pixel work, no
+    /// change of LY or of the STAT line. That is the rest of HBlank, VBlank lines after their
+    /// first few dots, and a fast-path pixel transfer until its last dot. The line's last dot
+    /// and the first ones of the next always go through [`Ppu::step`].
+    fn idle_dots(&self) -> u16 {
+        let d = self.dot;
+        if self.hblank_next || self.compare_in > 0 || self.compare_ly.is_some() || d <= LY_AT + 4 {
+            return 0;
+        }
+        let last = LINE_DOTS - 1;
+        if self.line < 144 {
+            match self.mode {
+                0 if d > MODE3_AT => last - d,
+                3 if self.fast => (MODE3_AT + self.fast_len - 1).saturating_sub(d),
+                _ => 0,
+            }
+        } else if self.line > 144 || d > MODE2_READ_AT {
+            last - d
+        } else {
+            0
+        }
+    }
+
+    /// One dot. Most dots outside pixel transfer have nothing scheduled and go straight to the
+    /// counters; the STAT line is looked at again only when something it depends on changed.
     fn step(&mut self) -> u8 {
         let mut ev = 0;
-        let line = self.line;
-        let d = self.dot;
+        let mut changed = false;
         if self.hblank_next {
             self.hblank_next = false;
             self.read_mode = 0;
@@ -543,7 +596,49 @@ impl Ppu {
             self.vram_lock = false;
             self.oam_write_lock = false;
             self.vram_write_lock = false;
+            changed = true;
         }
+        let (line, d) = (self.line, self.dot);
+        if self.mode != 3 && ((line < 144 && d <= MODE3_AT) || (line == 144 && d <= MODE2_READ_AT))
+        {
+            ev |= self.scheduled(line, d);
+            changed = true;
+        }
+        if self.mode == 3 {
+            if !self.fast {
+                self.mode3_dot();
+            } else if d + 1 - MODE3_AT >= self.fast_len {
+                self.render_line_fast();
+            }
+            if self.lx == WIDTH as u8 {
+                self.mode = 0;
+                self.hblank_next = true;
+                if self.in_window {
+                    self.win_line = self.win_line.wrapping_add(1);
+                }
+                ev |= event::HBLANK;
+                changed = true;
+            }
+        }
+        self.dot += 1;
+        if self.dot == LINE_DOTS {
+            self.dot = 0;
+            self.line = if self.line == 153 { 0 } else { self.line + 1 };
+        }
+        if self.dot <= LY_AT + 4 || self.compare_in > 0 || self.compare_ly.is_some() {
+            self.ly_dot();
+            changed = true;
+        }
+        if changed {
+            ev |= self.update_stat();
+        }
+        ev
+    }
+
+    /// What happens at the scheduled dots: the start of a visible line up to mode 3 (the OAM
+    /// scan, the locks, the reported mode), and the start of VBlank.
+    fn scheduled(&mut self, line: u8, d: u16) -> u8 {
+        let mut ev = 0;
         if line < 144 {
             let scan = !self.first_line_after_on();
             if d == 0 {
@@ -574,19 +669,11 @@ impl Ppu {
                 self.oam_write_lock = true;
                 self.vram_write_lock = true;
                 self.start_mode3();
-            }
-            if self.mode == 3 {
-                self.mode3_dot();
-                if self.lx == WIDTH as u8 {
-                    self.mode = 0;
-                    self.hblank_next = true;
-                    if self.in_window {
-                        self.win_line = self.win_line.wrapping_add(1);
-                    }
-                    ev |= event::HBLANK;
+                if !self.fifo_only {
+                    self.plan_fast_line();
                 }
             }
-        } else if line == 144 {
+        } else {
             if d == 0 {
                 self.mode = 1;
                 self.win_y = false;
@@ -612,13 +699,13 @@ impl Ppu {
                 self.read_mode = 1;
             }
         }
-        self.dot += 1;
-        if self.dot == LINE_DOTS {
-            self.dot = 0;
-            self.line = if self.line == 153 { 0 } else { self.line + 1 };
-        }
-        // When LY changes, the LY=LYC flag drops and is compared again 4 dots later. Line 153
-        // changes LY twice: to 153, then to 0 for the rest of the line.
+        ev
+    }
+
+    /// LY and the LY=LYC comparison, near the start of a line. When LY changes, the flag drops
+    /// and is compared again 4 dots later; line 153 changes LY twice, to 153 and then to 0 for
+    /// the rest of the line.
+    fn ly_dot(&mut self) {
         if let Some(value) = self.compare_ly.take() {
             self.lyc_match = value == self.lyc;
         }
@@ -638,7 +725,6 @@ impl Ppu {
                 self.compare_ly = Some(self.ly);
             }
         }
-        ev | self.update_stat()
     }
 
     fn first_line_after_on(&self) -> bool {
@@ -690,6 +776,7 @@ impl Ppu {
         self.obj_head = 0;
         self.last_penalty_tile = None;
         self.in_window = false;
+        self.fast = false;
         // WX below 7 starts the window before the first pixel, shifted left.
         if self.window_enabled() && self.wx < 7 {
             self.start_window();
@@ -759,7 +846,7 @@ impl Ppu {
             if !objects_on {
                 continue;
             }
-            penalty += self.sprite_penalty(s);
+            penalty += self.sprite_penalty(s, self.in_window);
             self.fetch_sprite(s);
         }
         if penalty > 0 {
@@ -775,12 +862,12 @@ impl Ppu {
     /// the background fetch of the tile the object's leftmost pixel is in, counted once per
     /// tile. Objects at OAM X 0 wait as if their pixel began a tile whatever SCX is, so the
     /// first costs 11 and the others on the line 6 (Mooneye `intr_2_mode0_timing_sprites`).
-    fn sprite_penalty(&mut self, s: Sprite) -> u8 {
+    fn sprite_penalty(&mut self, s: Sprite, in_window: bool) -> u8 {
         let pixel = s.x as i32 - 8;
         let (tile, offset) = if s.x == 0 {
             (i32::MIN, 0)
         } else {
-            let pos = if self.in_window {
+            let pos = if in_window {
                 pixel - (self.wx as i32 - 7)
             } else {
                 pixel + (self.scx & 7) as i32
@@ -795,7 +882,8 @@ impl Ppu {
         penalty
     }
 
-    fn fetch_sprite(&mut self, s: Sprite) {
+    /// An object's row on this line, both bit planes, flipped as its attributes say.
+    fn sprite_row(&self, s: Sprite) -> (u8, u8) {
         let tall = self.lcdc & 4 != 0;
         let mut row = (self.line as i16 + 16 - s.y as i16) as u8;
         let mut tile = s.tile;
@@ -811,11 +899,16 @@ impl Ppu {
             0
         };
         let addr = bank + tile as usize * 16 + row as usize * 2;
-        let (mut lo, mut hi) = (self.vram[addr], self.vram[addr + 1]);
+        let (lo, hi) = (self.vram[addr], self.vram[addr + 1]);
         if s.attr & 0x20 != 0 {
-            lo = lo.reverse_bits();
-            hi = hi.reverse_bits();
+            (lo.reverse_bits(), hi.reverse_bits())
+        } else {
+            (lo, hi)
         }
+    }
+
+    fn fetch_sprite(&mut self, s: Sprite) {
+        let (lo, hi) = self.sprite_row(s);
         let start = s.x as i16 - 8;
         for i in 0..8i16 {
             let k = start + i - self.lx as i16;
@@ -838,51 +931,191 @@ impl Ppu {
         }
     }
 
+    /// Starts this line's pixel transfer on the fast path: works out how long the FIFO would
+    /// take, by its own rules (12 dots for the first fetch done twice, the fine-scroll discard,
+    /// 160 pixels, 6 if the window starts mid-line, each object's penalty), so the line can be
+    /// drawn in one pass at the end. `tests::the_fast_path_matches_the_fifo` checks the two.
+    fn plan_fast_line(&mut self) {
+        let from_start = self.in_window;
+        let mid = (!from_start && self.window_enabled() && (7..167).contains(&self.wx))
+            .then(|| self.wx - 7);
+        let mut len = 12 + self.discard as u16 + WIDTH as u16 + if mid.is_some() { 6 } else { 0 };
+        if self.cgb || self.lcdc & 2 != 0 {
+            for i in 0..self.n_sprites as usize {
+                let s = self.sprites[i];
+                let start = s.x as i16 - 8;
+                if start >= WIDTH as i16 {
+                    break;
+                }
+                let at = start.max(0);
+                let in_window = from_start || mid.is_some_and(|w| at >= w as i16);
+                len += self.sprite_penalty(s, in_window) as u16;
+            }
+            self.last_penalty_tile = None;
+        }
+        self.fast = true;
+        self.fast_len = len;
+        self.fast_window = mid;
+    }
+
+    /// Leaves the fast path part-way through a line, before something it depends on changes:
+    /// the FIFO is run from the start of pixel transfer to now, with the values that held until
+    /// now, and carries on from there.
+    fn leave_fast_path(&mut self) {
+        if self.mode != 3 || !self.fast || !self.lcd_on() {
+            return;
+        }
+        let elapsed = self.dot - MODE3_AT;
+        self.start_mode3();
+        for _ in 0..elapsed {
+            self.mode3_dot();
+        }
+    }
+
+    /// Draws the whole line as the FIFO would have: the background up to where the window
+    /// starts, the window, and the objects by the FIFO's priority (the first fetched wins, or
+    /// on a CGB in CGB mode the lowest OAM index).
+    fn render_line_fast(&mut self) {
+        let mut bg = [0u8; WIDTH];
+        let mut attrs = [0u8; WIDTH];
+        let from_start = self.in_window;
+        let mid = self.fast_window;
+        let mut fill = |ppu: &Ppu, window: bool, from: usize, skip: usize, y: u8, first_col: u8| {
+            let mut lx = from;
+            let mut col = first_col;
+            let mut first = skip;
+            let end = if window {
+                WIDTH
+            } else {
+                mid.map_or(WIDTH, |w| w as usize)
+            };
+            while lx < end {
+                let (tile, attr) = ppu.map_tile(window, col, y);
+                let lo = ppu.tile_byte(tile, attr, y, false);
+                let hi = ppu.tile_byte(tile, attr, y, true);
+                for bit in first..8 {
+                    if lx >= end {
+                        break;
+                    }
+                    bg[lx] = (hi >> (7 - bit) & 1) << 1 | (lo >> (7 - bit) & 1);
+                    attrs[lx] = attr;
+                    lx += 1;
+                }
+                first = 0;
+                col = col.wrapping_add(1);
+            }
+        };
+        if !from_start {
+            fill(
+                self,
+                false,
+                0,
+                (self.scx & 7) as usize,
+                self.line.wrapping_add(self.scy),
+                self.scx >> 3,
+            );
+        }
+        if from_start || mid.is_some() {
+            self.in_window = true;
+            self.win_row = self.win_line;
+            let (from, skip) = if from_start {
+                (0, self.discard as usize)
+            } else {
+                (mid.unwrap_or(0) as usize, 0)
+            };
+            fill(self, true, from, skip, self.win_row, 0);
+        }
+        let mut obj = [ObjPixel::default(); WIDTH];
+        if self.cgb || self.lcdc & 2 != 0 {
+            let by_index = self.cgb_mode && self.opri & 1 == 0;
+            for i in 0..self.n_sprites as usize {
+                let s = self.sprites[i];
+                let start = s.x as i16 - 8;
+                if start >= WIDTH as i16 {
+                    break;
+                }
+                let (lo, hi) = self.sprite_row(s);
+                for b in 0..8i16 {
+                    let x = start + b;
+                    if !(0..WIDTH as i16).contains(&x) {
+                        continue;
+                    }
+                    let color = (hi >> (7 - b) & 1) << 1 | (lo >> (7 - b) & 1);
+                    let slot = &mut obj[x as usize];
+                    if color != 0 && (slot.color == 0 || (by_index && s.index < slot.index)) {
+                        *slot = ObjPixel {
+                            color,
+                            attr: s.attr,
+                            index: s.index,
+                        };
+                    }
+                }
+            }
+        }
+        let row = self.line as usize * WIDTH;
+        for lx in 0..WIDTH {
+            self.back[row + lx] = self.mix(bg[lx], attrs[lx], obj[lx]);
+        }
+        self.lx = WIDTH as u8;
+        self.fast = false;
+    }
+
+    /// A background or window tile: its number and (CGB) attributes, for tile column `col` of
+    /// map row `y / 8`.
+    fn map_tile(&self, window: bool, col: u8, y: u8) -> (u8, u8) {
+        let map = if window {
+            self.lcdc & 0x40 != 0
+        } else {
+            self.lcdc & 0x08 != 0
+        };
+        let idx = if map { 0x1c00 } else { 0x1800 } + (y as usize / 8) * 32 + (col & 31) as usize;
+        let attr = if self.cgb_mode {
+            self.vram[0x2000 + idx]
+        } else {
+            0
+        };
+        (self.vram[idx], attr)
+    }
+
+    /// One byte (low or high plane) of a background tile's row `y % 8`, flipped as its
+    /// attributes say.
+    fn tile_byte(&self, tile: u8, attr: u8, y: u8, high: bool) -> u8 {
+        let mut row = y & 7;
+        if attr & 0x40 != 0 {
+            row = 7 - row;
+        }
+        let base = if self.lcdc & 0x10 != 0 {
+            tile as usize * 16
+        } else {
+            (0x1000 + (tile as i8 as i32) * 16) as usize
+        };
+        let bank = if attr & 8 != 0 { 0x2000 } else { 0 };
+        let v = self.vram[bank + base + row as usize * 2 + high as usize];
+        if attr & 0x20 != 0 {
+            v.reverse_bits()
+        } else {
+            v
+        }
+    }
+
     fn fetch_dot(&mut self) {
         let f = self.fetcher;
+        let y = if self.in_window {
+            self.win_row
+        } else {
+            self.line.wrapping_add(self.scy)
+        };
         match f.dot {
             1 => {
-                let (map, col, y) = if self.in_window {
-                    (self.lcdc & 0x40 != 0, f.x & 31, self.win_row)
+                let col = if self.in_window {
+                    f.x
                 } else {
-                    let col = ((self.scx >> 3).wrapping_add(f.x)) & 31;
-                    (self.lcdc & 0x08 != 0, col, self.line.wrapping_add(self.scy))
+                    (self.scx >> 3).wrapping_add(f.x)
                 };
-                let idx = if map { 0x1c00 } else { 0x1800 } + (y as usize / 8) * 32 + col as usize;
-                self.fetcher.tile = self.vram[idx];
-                self.fetcher.attr = if self.cgb_mode {
-                    self.vram[0x2000 + idx]
-                } else {
-                    0
-                };
+                (self.fetcher.tile, self.fetcher.attr) = self.map_tile(self.in_window, col, y);
             }
-            3 | 5 => {
-                let y = if self.in_window {
-                    self.win_row
-                } else {
-                    self.line.wrapping_add(self.scy)
-                };
-                let mut row = y & 7;
-                if f.attr & 0x40 != 0 {
-                    row = 7 - row;
-                }
-                let base = if self.lcdc & 0x10 != 0 {
-                    f.tile as usize * 16
-                } else {
-                    (0x1000 + (f.tile as i8 as i32) * 16) as usize
-                };
-                let bank = if f.attr & 8 != 0 { 0x2000 } else { 0 };
-                let addr = bank + base + row as usize * 2 + (f.dot == 5) as usize;
-                let mut v = self.vram[addr];
-                if f.attr & 0x20 != 0 {
-                    v = v.reverse_bits();
-                }
-                if f.dot == 3 {
-                    self.fetcher.lo = v;
-                } else {
-                    self.fetcher.hi = v;
-                }
-            }
+            3 => self.fetcher.lo = self.tile_byte(f.tile, f.attr, y, false),
+            5 => self.fetcher.hi = self.tile_byte(f.tile, f.attr, y, true),
             _ => {}
         }
         if self.fetcher.dot < 6 {
@@ -916,12 +1149,11 @@ impl Ppu {
         u16::from_le_bytes([ram[i], ram[i + 1]]) & 0x7fff
     }
 
-    fn output_pixel(&mut self) {
-        let attr = self.bg_attr;
-        let mut bg = self.pop_bg();
-        let obj = self.pop_obj();
+    /// The colour of one pixel from its background pixel (colour index and CGB attributes)
+    /// and the object pixel over it: the same rules for the FIFO and for a whole line.
+    fn mix(&self, mut bg: u8, attr: u8, obj: ObjPixel) -> u16 {
         let objects_on = self.lcdc & 2 != 0;
-        let out = if self.cgb_mode {
+        if self.cgb_mode {
             // LCDC bit 0 is the master priority on a CGB: off, objects are always on top.
             let master = self.lcdc & 1 != 0;
             let bg_wins = obj.color == 0
@@ -953,7 +1185,14 @@ impl Ppu {
             } else {
                 shade as u16
             }
-        };
+        }
+    }
+
+    fn output_pixel(&mut self) {
+        let attr = self.bg_attr;
+        let bg = self.pop_bg();
+        let obj = self.pop_obj();
+        let out = self.mix(bg, attr, obj);
         self.back[self.line as usize * WIDTH + self.lx as usize] = out;
         self.lx += 1;
     }
@@ -1047,6 +1286,9 @@ impl Ppu {
         }
         v.u8(&mut self.obj_head);
         v.opt_i32(&mut self.last_penalty_tile);
+        v.bool(&mut self.fast);
+        v.u16(&mut self.fast_len);
+        v.opt_u8(&mut self.fast_window);
         v.u16s(&mut self.frame);
         v.u16s(&mut self.back);
     }
@@ -1055,6 +1297,7 @@ impl Ppu {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alloc::vec::Vec;
 
     /// A PPU with the LCD on, at the start of line 1 (line 0 after turning on is short and has
     /// no OAM scan).
@@ -1110,6 +1353,89 @@ mod tests {
         p.wx = 7 + 80;
         p.write(0xff40, 0xb1);
         assert_eq!(mode3_end(&mut p), 172 + 6);
+    }
+
+    /// A small, deterministic random number generator for the comparison below.
+    struct Lcg(u64);
+
+    impl Lcg {
+        fn next(&mut self) -> u8 {
+            self.0 = self
+                .0
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            (self.0 >> 56) as u8
+        }
+    }
+
+    /// Runs two frames, making `writes` (at a dot count, a register, a value) on the way,
+    /// and returns every line's pixels and the dot its mode 0 interrupt came.
+    fn draw(p: &mut Ppu, writes: &[(u32, u16, u8)]) -> ([u16; WIDTH * HEIGHT], Vec<(u8, u16)>) {
+        let mut hblanks = Vec::new();
+        let mut next = 0;
+        for t in 0..2 * FRAME_DOTS {
+            while next < writes.len() && writes[next].0 == t {
+                p.write(writes[next].1, writes[next].2);
+                next += 1;
+            }
+            if p.step() & event::HBLANK != 0 {
+                hblanks.push(p.position());
+            }
+        }
+        (p.back, hblanks)
+    }
+
+    #[test]
+    fn the_fast_path_matches_the_fifo() {
+        let mut rng = Lcg(0x1234_5678);
+        for case in 0..300 {
+            let cgb = case % 3 != 0;
+            let mut p = Ppu::new(cgb, cgb && case % 2 == 0);
+            for b in p.vram.iter_mut() {
+                *b = rng.next();
+            }
+            // Objects on the screen's lines, many of them near each other and the edges.
+            for i in 0..40 {
+                p.oam[i * 4] = 16 + (rng.next() % 150);
+                p.oam[i * 4 + 1] = rng.next() % 176;
+                p.oam[i * 4 + 2] = rng.next();
+                p.oam[i * 4 + 3] = rng.next();
+            }
+            for b in p.bg_pal.iter_mut().chain(p.obj_pal.iter_mut()) {
+                *b = rng.next();
+            }
+            p.scx = rng.next();
+            p.scy = rng.next();
+            p.wy = rng.next() % 160;
+            p.wx = rng.next() % 176;
+            p.bgp = rng.next();
+            p.obp = [rng.next(), rng.next()];
+            p.opri = rng.next() & 1;
+            p.write(0xff40, 0x80 | (rng.next() & 0x7f));
+            // Half the cases change scrolling, palettes, the window or LCDC mid-line, as raster
+            // effects do: the fast path must hand over to the FIFO exactly.
+            let mut writes = Vec::new();
+            if case % 2 == 1 {
+                let regs = [0xff42, 0xff43, 0xff47, 0xff48, 0xff4b, 0xff40];
+                let mut t = 0u32;
+                for _ in 0..200 {
+                    t += 100 + rng.next() as u32 * 3;
+                    let reg = regs[rng.next() as usize % regs.len()];
+                    let v = if reg == 0xff40 {
+                        0x80 | rng.next()
+                    } else {
+                        rng.next()
+                    };
+                    writes.push((t, reg, v));
+                }
+            }
+            let mut fifo = p.clone();
+            fifo.fifo_only = true;
+            let (fast_px, fast_t) = draw(&mut p, &writes);
+            let (fifo_px, fifo_t) = draw(&mut fifo, &writes);
+            assert_eq!(fast_t, fifo_t, "case {case}: mode 3 lengths differ");
+            assert!(fast_px == fifo_px, "case {case}: pixels differ");
+        }
     }
 
     #[test]

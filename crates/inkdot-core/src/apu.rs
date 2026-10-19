@@ -109,9 +109,14 @@ impl Pulse {
         }
     }
 
-    /// Advances by `units` of 4 dots; returns whether the output may have changed.
+    /// Advances by `units` of 4 dots; returns whether the output changed.
     fn run(&mut self, units: u16) -> bool {
-        let mut changed = false;
+        // Most M-cycles don't reach the next duty step.
+        if self.timer > units {
+            self.timer -= units;
+            return false;
+        }
+        let before = self.output();
         let mut left = units;
         while left > 0 {
             if self.timer > left {
@@ -122,10 +127,9 @@ impl Pulse {
             self.timer = 2048 - self.period;
             if self.started {
                 self.step = (self.step + 1) & 7;
-                changed = true;
             }
         }
-        changed
+        self.output() != before
     }
 
     fn sweep_calc(&mut self) -> u16 {
@@ -213,9 +217,13 @@ impl Wave {
     }
 
     fn run(&mut self, units: u16) -> bool {
-        let mut changed = false;
-        let mut left = units;
         self.since_read = self.since_read.saturating_add(units as u32 * 2);
+        if self.timer > units {
+            self.timer -= units;
+            return false;
+        }
+        let before = self.output();
+        let mut left = units;
         while left > 0 {
             if self.timer > left {
                 self.timer -= left;
@@ -231,9 +239,8 @@ impl Wave {
                 byte & 0xf
             };
             self.since_read = left as u32 * 2;
-            changed = true;
         }
-        changed
+        self.output() != before
     }
 }
 
@@ -278,7 +285,11 @@ impl Noise {
         if self.nr43 >> 4 >= 14 {
             return false;
         }
-        let mut changed = false;
+        if self.timer > dots {
+            self.timer -= dots;
+            return false;
+        }
+        let before = self.output();
         let mut left = dots;
         while left > 0 {
             if self.timer > left {
@@ -288,9 +299,8 @@ impl Noise {
             left -= self.timer;
             self.timer = self.period_dots();
             self.clock_lfsr();
-            changed = true;
         }
-        changed
+        self.output() != before
     }
 }
 
