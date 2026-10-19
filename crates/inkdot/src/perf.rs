@@ -25,17 +25,23 @@ struct SchedAttr {
     util_max: u32,
 }
 
-/// Asks that this thread run at no less than `percent` of a core's capacity. Returns whether
-/// the kernel took it.
+/// In play: about three quarters of a core. Measured on the DS+, 512 left schedutil at the low
+/// clocks after each wake; the frame needs the clock up from its first instruction.
+pub const PLAY: u32 = 768;
+/// In the menu (the game paused) nothing needs hurrying.
+pub const MENU: u32 = 0;
+
+/// Asks that this thread run at no less than `util` of a core's capacity (of 1024). Returns
+/// whether the kernel took it.
 #[cfg(target_os = "linux")]
-pub fn clamp_min(percent: u32) -> bool {
+pub fn clamp_min(util: u32) -> bool {
     const KEEP_POLICY: u64 = 0x08;
     const KEEP_PARAMS: u64 = 0x10;
     const UTIL_CLAMP_MIN: u64 = 0x20;
     let attr = SchedAttr {
         size: std::mem::size_of::<SchedAttr>() as u32,
         flags: KEEP_POLICY | KEEP_PARAMS | UTIL_CLAMP_MIN,
-        util_min: 1024 * percent.min(100) / 100,
+        util_min: util.min(1024),
         util_max: 1024,
         ..SchedAttr::default()
     };
@@ -44,6 +50,6 @@ pub fn clamp_min(percent: u32) -> bool {
 }
 
 #[cfg(not(target_os = "linux"))]
-pub fn clamp_min(_percent: u32) -> bool {
+pub fn clamp_min(_util: u32) -> bool {
     false
 }

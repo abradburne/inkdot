@@ -8,8 +8,10 @@
 //! frame. The bottom screen is the emulator's own interface, drawn in software
 //! ([`crate::ui`]) and uploaded only when it changes.
 //!
-//! Each screen is a window of its own where nibOS has a display per panel; on a computer, one
-//! window shows both, stacked, at half size.
+//! Each screen is a window of its own where nibOS has a display per panel; on the stock OS,
+//! whose Weston makes the two panels one display (the bottom on the right), one window covers
+//! both and each screen is half of it; on a computer, one window shows both, stacked, at half
+//! size.
 
 use glow::HasContext;
 use nibkit::screens::{self, Screen};
@@ -81,6 +83,8 @@ pub struct Video {
     top: Target,
     /// `None` on a computer, where the top window shows both screens.
     bottom: Option<Target>,
+    /// Where the bottom screen is in the top's window, when they share one (GL's viewport).
+    shared_ui: Option<(i32, i32, i32, i32)>,
     desktop: bool,
     game: glow::Program,
     plain: glow::Program,
@@ -191,7 +195,7 @@ impl Video {
                 .build()
                 .map_err(|e| e.to_string())
         };
-        let (top, bottom, desktop) = match placement {
+        let (top, bottom, shared_ui, desktop) = match placement {
             Some(p) if !p.shared => {
                 let top = window(p.region(Screen::Top).rect)?;
                 let bottom = window(p.region(Screen::Bottom).rect)?;
@@ -205,6 +209,37 @@ impl Video {
                         window: bottom,
                         viewport: full,
                     }),
+                    None,
+                    false,
+                )
+            }
+            Some(p) => {
+                let (t, b) = (p.region(Screen::Top).rect, p.region(Screen::Bottom).rect);
+                let (x0, y0) = (t.x.min(b.x), t.y.min(b.y));
+                let x1 = (t.x + t.w as i32).max(b.x + b.w as i32);
+                let y1 = (t.y + t.h as i32).max(b.y + b.h as i32);
+                let union = screens::Rect::new(x0, y0, (x1 - x0) as u32, (y1 - y0) as u32);
+                let window = window(union)?;
+                let (dw, dh) = window.drawable_size();
+                let (sx, sy) = (dw as f32 / union.w as f32, dh as f32 / union.h as f32);
+                // GL counts rows from the bottom of the window.
+                let place = |r: screens::Rect| {
+                    let (x, y) = (r.x - union.x, r.y - union.y);
+                    let (w, h) = ((r.w as f32 * sx) as i32, (r.h as f32 * sy) as i32);
+                    (
+                        (x as f32 * sx) as i32,
+                        dh as i32 - (y as f32 * sy) as i32 - h,
+                        w,
+                        h,
+                    )
+                };
+                (
+                    Target {
+                        window,
+                        viewport: place(t),
+                    },
+                    None,
+                    Some(place(b)),
                     false,
                 )
             }
@@ -223,6 +258,7 @@ impl Video {
                         viewport: (0, dh as i32 / 2, dw as i32, dh as i32 / 2),
                     },
                     None,
+                    Some((0, 0, dw as i32, dh as i32 / 2)),
                     true,
                 )
             }
@@ -260,6 +296,7 @@ impl Video {
             _context: context,
             top,
             bottom,
+            shared_ui,
             desktop,
             game,
             plain,
@@ -359,8 +396,9 @@ impl Video {
         let surround = rgb(look.surround);
         // SAFETY: GL calls on the current context with this module's objects.
         unsafe {
-            if self.desktop {
-                gl.viewport(0, 0, self.top.viewport.2, self.top.viewport.3 * 2);
+            if self.shared_ui.is_some() {
+                let (w, h) = self.top.window.drawable_size();
+                gl.viewport(0, 0, w as i32, h as i32);
                 gl.clear_color(0.05, 0.05, 0.06, 1.0);
                 gl.clear(glow::COLOR_BUFFER_BIT);
                 gl.viewport(
@@ -395,9 +433,9 @@ impl Video {
         }
         self.draw_quad(self.game, Self::clip((GAME_X, GAME_Y, GAME_W, GAME_H)));
         let shot = capture.then(|| self.read_back(self.top.viewport));
-        if self.desktop {
-            // The bottom screen goes in the same window, below.
-            self.draw_ui_at((0, 0, self.top.viewport.2, self.top.viewport.3));
+        if let Some(v) = self.shared_ui {
+            // The bottom screen is in the same window.
+            self.draw_ui_at(v);
         }
         let t = std::time::Instant::now();
         self.top.window.gl_swap_window();

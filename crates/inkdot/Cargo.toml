@@ -11,7 +11,7 @@ authors.workspace = true
 inkdot-core = { path = "../inkdot-core" }
 # nibOS's SDK library (sdk/nibkit in the nibOS repository, MIT): the screens, vblank, buttons,
 # touch, brightness, paths, settings and DSlot's description format.
-nibkit = { path = "../../../nibos/sdk/nibkit", features = ["dslot"] }
+nibkit = { path = "../../../nibos/sdk/nibkit", default-features = false }
 # SDL2's API, linked against the system's SDL2 (sdl2-compat on SDL3), as DSlot does.
 sdl2 = "0.38"
 glow = "0.14"
@@ -22,6 +22,15 @@ libc = "0.2"
 
 # The core forbids unsafe code; the frontend needs it for GL and a few libc calls, each with a
 # SAFETY comment saying why it holds.
+# The system it runs on, one of the two (as nibkit's): nibOS (the default) or the RG DS+'s stock
+# OS. `dslot` adds DSlot's part: options kept in DSlot's settings file, and a test that the
+# description DSlot reads matches inkdot's options. inkdot runs without DSlot either way.
+[features]
+default = ["nibos"]
+nibos = ["nibkit/nibos"]
+stock = ["nibkit/stock"]
+dslot = ["nibkit/dslot"]
+
 [lints.rust]
 unsafe_code = "allow"
 

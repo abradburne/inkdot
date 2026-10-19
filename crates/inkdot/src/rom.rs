@@ -14,6 +14,22 @@ pub fn load(path: &Path) -> Result<(Vec<u8>, Option<String>), String> {
     Ok((data, None))
 }
 
+/// The game's name from its file: without `.zip`, then without `.gb`/`.gbc`
+/// (`Tetris (World).gb.zip` is `Tetris (World)`). Saves are named after it.
+pub fn stem(path: &Path) -> String {
+    let mut name = path
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("game")
+        .to_owned();
+    for ext in [".zip", ".gbc", ".gb"] {
+        if name.len() > ext.len() && name.to_ascii_lowercase().ends_with(ext) {
+            name.truncate(name.len() - ext.len());
+        }
+    }
+    name
+}
+
 fn u16le(d: &[u8], at: usize) -> Option<usize> {
     Some(u16::from_le_bytes(d.get(at..at + 2)?.try_into().ok()?) as usize)
 }
@@ -72,6 +88,20 @@ pub fn from_zip(zip: &[u8]) -> Result<(String, Vec<u8>), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn stems() {
+        for (file, want) in [
+            ("/r/Tetris (World).gb", "Tetris (World)"),
+            ("Pokemon Gold.GBC", "Pokemon Gold"),
+            ("Zelda.gbc.zip", "Zelda"),
+            ("Zelda.zip", "Zelda"),
+            ("v1.2.gb", "v1.2"),
+            (".gb", ".gb"),
+        ] {
+            assert_eq!(stem(Path::new(file)), want, "{file}");
+        }
+    }
 
     /// A zip with one file, stored or deflated.
     fn zip(name: &str, data: &[u8], deflate: bool) -> Vec<u8> {

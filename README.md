@@ -1,7 +1,7 @@
 # inkdot
 
-A Game Boy and Game Boy Color emulator, written from scratch in Rust for the Anbernic RG DS+ on
-nibOS and started from DSlot. The game fills the top screen at an exact 5× scale; the bottom touch
+A Game Boy and Game Boy Color emulator, written from scratch in Rust for the Anbernic RG DS+:
+on nibOS, from DSlot or by itself, and on the stock OS, from Apps. The game fills the top screen at an exact 5× scale; the bottom touch
 screen holds the emulator's controls: save states with their pictures, the look (a Game Boy Color,
 a Game Boy, a Pocket, a Light), fast-forward and options.
 
@@ -25,6 +25,7 @@ The core passes the test suites that matter for a Game Boy emulator in full:
 | [`crates/inkdot`](crates/inkdot) | The program for the DS+: SDL2, GLES, [nibkit](../nibos/sdk/nibkit). |
 | [`crates/inkdot-test`](crates/inkdot-test) | Runs the core headless: the test suites, benchmarks, sound to WAV. |
 | [`packaging/nibos`](packaging/nibos) | The PKGBUILD and the description DSlot reads. |
+| [`packaging/stock`](packaging/stock) | The stock OS's Apps script, and the script that builds its zip. |
 
 [docs/performance.md](docs/performance.md) has the measurements on the handheld (about 3 ms a
 frame for most games at full clock; press to screen about 23 ms).
@@ -41,8 +42,20 @@ make check                     # format, lint, every test including the ROM suit
 cargo run --release -p inkdot -- path/to/game.gb      # on a computer: both screens in one window
 ```
 
-For the DS+: `tools/run-on-device.sh game.gb` builds in the aarch64 build machine and runs it on
-the handheld in place of DSlot; `packaging/nibos/PKGBUILD` builds the package.
+For the DS+ on nibOS: `tools/run-on-device.sh game.gb` builds in the aarch64 build machine and
+runs it on the handheld in place of DSlot; `packaging/nibos/PKGBUILD` builds the package.
+
+The program is built for one system at a time, by Cargo feature: `nibos` (the default) or
+`stock`. `dslot` adds DSlot's part (its settings file, and a test that its description of inkdot
+matches inkdot's options); without it inkdot keeps its own settings.
+
+For the stock OS, cross-built with [cargo-zigbuild](https://github.com/rust-cross/cargo-zigbuild)
+for its glibc 2.31 against the handheld's own SDL2, copied out of a stock image into
+`sysroot/libSDL2.so` (as for DSlot: its docs/building.md shows how; it isn't in the repository):
+
+```bash
+packaging/stock/package.sh     # -> dist/inkdot-<version>-rgdsplus-stock.zip: unzip onto the games card
+```
 
 ## Licence
 

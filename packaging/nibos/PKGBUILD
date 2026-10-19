@@ -33,7 +33,7 @@ prepare() {
     rm -rf "$srcdir/inkdot" "$srcdir/nibos"
     mkdir -p "$srcdir/inkdot/packaging/nibos"
     cp -r "$_root"/{Cargo.toml,Cargo.lock,.cargo,crates,assets,README.md,CHANGELOG.md,LICENSE-MIT,LICENSE-APACHE,docs} "$srcdir/inkdot/"
-    # The description is built into the program as well as installed for DSlot.
+    # Installed for DSlot, and checked against the program's options by a test.
     cp "$_root/packaging/nibos/inkdot.toml" "$srcdir/inkdot/packaging/nibos/"
     # Where Cargo.toml looks for it: ../nibos/sdk/nibkit.
     mkdir -p "$srcdir/nibos/sdk/nibkit"
@@ -44,13 +44,13 @@ prepare() {
 
 build() {
     cd "$srcdir/inkdot"
-    cargo build --release --frozen -p inkdot
+    cargo build --release --frozen -p inkdot --features dslot
 }
 
 check() {
     cd "$srcdir/inkdot"
     # The test ROM suites skip here (the ROMs aren't part of the sources); make check runs them.
-    cargo test --release --frozen -p inkdot-core -p inkdot
+    cargo test --release --frozen -p inkdot-core -p inkdot --features inkdot/dslot
 }
 
 package() {

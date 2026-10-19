@@ -13,7 +13,7 @@ key = "look"
 label = "Look"
 systems = ["GB"]
 values = ["color", "gameboy", "pocket", "light", "grey"]
-labels = ["Game Boy Color", "Game Boy", "Game Boy Pocket", "Game Boy Light", "Plain grey"]
+labels = ["Game Boy Color", "Game Boy (green)", "Game Boy Pocket", "Game Boy Light", "Plain grey"]
 default = "color"
 args = ["--look", "{value}"]
 

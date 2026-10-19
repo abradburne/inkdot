@@ -27,7 +27,8 @@ using a new one. A commit that implements hardware behaviour names its source in
 | `crates/inkdot-core` | The machine: CPU, PPU, APU, timer, cartridges, save states. `no_std`, no dependencies, no `unsafe`. |
 | `crates/inkdot-test` | Headless runner: the test ROM suites, benchmarks, `--wav`, `--io`, `--break`. |
 | `crates/inkdot` | The DS+ program: SDL2 + GLES, nibkit (`../nibos/sdk/nibkit`). |
-| `packaging/nibos` | The DSlot description (`inkdot.toml`, also built into the program) and the PKGBUILD. |
+| `packaging/nibos` | The DSlot description (`inkdot.toml`, checked against `options::SPECS` by a test with `--features dslot`) and the PKGBUILD. |
+| `packaging/stock` | The stock OS's Apps script and `package.sh` (cargo-zigbuild, `--features stock`). |
 | `tools/` | `fetch-test-roms.sh`, `run-on-device.sh`, `lib.sh` (settings from `config.local.sh`). |
 | `docs/` | Design, architecture, accuracy, provenance, using. |
 
@@ -48,6 +49,9 @@ Builds run in the aarch64 build machine (`BUILD_MACHINE`). Take the shared devic
 other sessions use the device; never stop DSlot while a game is being played (`pgrep dsperate`,
 `pgrep inkdot`); start DSlot again after. `tools/run-on-device.sh ROM` does the stopping and
 starting. Follow nibOS's AGENTS.md for screens, input, audio and device settings.
+
+inkdot must work without DSlot (started by hand, its own settings and saves) and on the stock OS.
+Trying it on the stock OS means swapping the card: ask the user first, every time.
 
 ## Commits
 

@@ -16,3 +16,7 @@ The first version.
   volume), dimmed or off while untouched; resume where the game was left; battery saves and the
   clock in DSlot's saves folder.
 - **nibOS**: a PKGBUILD, and a DSlot description whose options DSlot shows per console and game.
+- **Without DSlot**: `inkdot game.gbc` or `inkdot` alone (a list of the games on the cards), its
+  own settings file and saves folders.
+- **Stock OS**: an Apps script and a zip for the games card (`--features stock`): one window
+  across both panels, 44.1 kHz sound, the stock paths.

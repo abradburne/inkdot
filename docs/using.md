@@ -1,8 +1,15 @@
 # Using inkdot
 
-DSlot starts inkdot for games in `Roms/GB` and `Roms/GBC` on either card (`.gb`, `.gbc`, or a
-`.zip` with one in it). Leaving the game (Back, or Quit on the bottom screen) saves where you are;
-the next start resumes there.
+inkdot plays games in `.gb`, `.gbc`, or a `.zip` with one in it. It can be started three ways:
+
+- **From DSlot** (nibOS), for games in `Roms/GB` and `Roms/GBC` on either card.
+- **From Apps on the stock OS**: copy the stock zip's `Roms` folder onto the games card. It
+  opens with a list of the games in `Roms/GB` and `Roms/GBC` on both cards.
+- **By hand**: `inkdot game.gbc`, or `inkdot` alone for the list. `inkdot --help` gives the
+  options, which are the same as on the Options page (`--look pocket`, `--no-lcd`, `--fast 6`).
+
+Leaving the game (Back, or Quit on the bottom screen) saves where you are; the next start
+resumes there.
 
 ## Controls
 
@@ -27,7 +34,11 @@ wakes it without doing anything else.
 ## Options
 
 Each option can be set for one game or for all of its console's games (the two buttons at the top
-of the Look and Options pages); DSlot's menu has the same options per console and per game.
+of the Look and Options pages); DSlot's menu has the same options per console and per game. An
+option given on the command line wins for that run.
+
+The choices are kept in `settings.toml`: DSlot's own settings file when inkdot runs under DSlot,
+else inkdot's (`~/.config/inkdot/` on nibOS, beside the program on the stock OS).
 
 | Option | | Default |
 |---|---|---|
@@ -42,7 +53,17 @@ of the Look and Options pages); DSlot's menu has the same options per console an
 
 ## Files
 
-In the game's saves folder (`/mnt/roms/Saves/GB/<game>/` or `GBC`): `<game>.sav` (battery RAM, the
-usual format), `<game>.rtc` (the cartridge clock), `<game>.state1`–`.state6` (save states with
-their pictures) and `<game>.auto.state` (where the game was left). DSlot's **Clear resume state**
+In the game's saves folder: the one DSlot gives, else `Saves/GB/<game>/` (or `GBC`) on the card
+the system starts from (`/mnt/roms/Saves` on nibOS, `/mnt/mmc/Saves` on the stock OS), else, on a
+computer, `~/.local/share/inkdot/saves/`. `--saves DIR` names another.
+
+`<game>.sav` (battery RAM, the usual format; a `<game>.gbc.sav` or `.gb.sav` from elsewhere is
+read too), `<game>.rtc` (the cartridge clock), `<game>.state1`–`.state6` (save states with their
+pictures) and `<game>.auto.state` (where the game was left). DSlot's **Clear resume state**
 deletes the last.
+
+## On the stock OS
+
+As on nibOS, except: the brightness is the stock OS's own (its keys, not inkdot's sliders), the
+bottom screen stays lit (the stock OS keeps its backlight to itself), the frame waits on the display's own sync rather than
+the panel's vblank, and the sound is at 44.1 kHz with bigger buffers, so it lags a little more.

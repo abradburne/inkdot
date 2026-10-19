@@ -1,4 +1,6 @@
-//! A game's files in its saves folder (DSlot makes it: `/mnt/roms/Saves/GB/<ROM name>/`):
+//! A game's files in its saves folder: the one DSlot gives (`--saves`), else the system's
+//! (`<saves root>/GB/<ROM name>/`, as DSlot and the stock OS lay them out), else, where there is
+//! no saves root (a computer), inkdot's own data folder.
 //!
 //! | File | |
 //! |---|---|
@@ -40,6 +42,14 @@ impl SaveFiles {
         self.file("sav")
     }
 
+    /// The battery RAM: `<ROM name>.sav`, or the `<ROM name>.gbc.sav` / `.gb.sav` that some
+    /// tools write, so a save brought from elsewhere is found.
+    pub fn read_battery(&self) -> Option<Vec<u8>> {
+        [self.battery(), self.file("gbc.sav"), self.file("gb.sav")]
+            .iter()
+            .find_map(|p| std::fs::read(p).ok())
+    }
+
     pub fn clock(&self) -> PathBuf {
         self.file("rtc")
     }
@@ -52,6 +62,17 @@ impl SaveFiles {
             self.file(&format!("state{slot}"))
         }
     }
+}
+
+/// The saves folder for a game, when none is given.
+pub fn default_dir(console: &str, stem: &str) -> PathBuf {
+    let root = nibkit::paths::saves_root();
+    let root = if root.is_dir() {
+        root
+    } else {
+        nibkit::paths::AppDirs::new("inkdot").data.join("saves")
+    };
+    nibkit::paths::saves_dir(&root, console, stem)
 }
 
 /// A save state as kept in a slot: the machine, its picture and when it was made.
@@ -178,6 +199,19 @@ mod tests {
         let d = std::env::temp_dir().join(format!("inkdot-test-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&d);
         d
+    }
+
+    #[test]
+    fn a_battery_save_from_elsewhere_is_found() {
+        let dir = temp("other-sav");
+        std::fs::create_dir_all(&dir).unwrap();
+        let f = SaveFiles::new(dir.clone(), "Zelda");
+        assert_eq!(f.read_battery(), None);
+        std::fs::write(dir.join("Zelda.gbc.sav"), [1, 2]).unwrap();
+        assert_eq!(f.read_battery(), Some(vec![1, 2]));
+        std::fs::write(dir.join("Zelda.sav"), [3]).unwrap();
+        assert_eq!(f.read_battery(), Some(vec![3]));
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

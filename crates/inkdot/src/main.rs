@@ -1,6 +1,7 @@
-//! inkdot: a Game Boy and Game Boy Color emulator for the Anbernic RG DS+ on nibOS, started by
-//! DSlot. The game is on the top screen; the bottom touch screen has the emulator's controls.
-//! `inkdot --help` lists the options; docs/using.md says how to play.
+//! inkdot: a Game Boy and Game Boy Color emulator for the Anbernic RG DS+, on nibOS or the stock
+//! OS, started by DSlot, from the stock OS's Apps or by hand. The game is on the top screen; the
+//! bottom touch screen has the emulator's controls. `inkdot --help` lists the options;
+//! docs/using.md says how to play.
 
 mod args;
 mod input;
@@ -8,6 +9,7 @@ mod looks;
 mod options;
 mod pacing;
 mod perf;
+mod picker;
 mod rom;
 mod saves;
 mod ui;
@@ -48,8 +50,15 @@ fn watch_sigterm() {
     }
 }
 
-/// The audio queue's target, in sample frames: about a frame and a half.
-const AUDIO_TARGET: u32 = 1200;
+/// The audio device's buffer, in sample frames: 512 plays without gaps on nibOS's PipeWire
+/// (measured); the stock OS's ALSA shim needs nibkit's bigger one.
+const AUDIO_BUFFER: u32 = if cfg!(feature = "stock") {
+    nibkit::audio::ADVICE.buffer_frames
+} else {
+    512
+};
+/// The audio queue's target, in sample frames: the device's buffer and about a game frame more.
+const AUDIO_TARGET: u32 = AUDIO_BUFFER + 700;
 /// The bottom screen dims (or goes off) after this long untouched in play.
 const IDLE: Duration = Duration::from_secs(10);
 
@@ -62,7 +71,7 @@ struct Debug {
     stats: bool,
     shot: Option<PathBuf>,
     latency: bool,
-    /// The utilization clamp to ask for, in percent, instead of the default.
+    /// The utilization clamp to ask for in play (of 1024), instead of perf::PLAY.
     clamp: Option<u32>,
 }
 
@@ -126,6 +135,8 @@ struct App {
     model: ui::Model,
     pacer: Pacer,
     rate: RateControl,
+    /// The audio device's sample rate.
+    out_rate: f64,
     samples: Vec<i16>,
     rgba: Vec<u8>,
     colors: Vec<[u8; 4]>,
@@ -171,29 +182,35 @@ fn main() {
 
 fn run(args: args::Args) -> Result<(), String> {
     watch_sigterm();
-    // Half a core's capacity keeps a frame to a few milliseconds (perf.rs).
-    if !perf::clamp_min(Debug::from_env().clamp.unwrap_or(50)) {
-        eprintln!(
-            "inkdot: no utilization clamp (kernel without uclamp): schedutil decides the clock"
-        );
+    let sdl = sdl2::init()?;
+    let video_sys = sdl.video()?;
+    let mut video = Video::open(&video_sys)?;
+    let mut events = sdl.event_pump()?;
+    let pads = sdl.game_controller()?;
+    for file in nibkit::input::CONTROLLER_MAPPINGS {
+        let _ = pads.load_mappings(file);
     }
-    let (rom, _) = rom::load(&args.rom)?;
-    let stem = args
-        .rom
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or("game")
-        .to_owned();
+    let _pads: Vec<GameController> = (0..pads.num_joysticks().unwrap_or(0))
+        .filter_map(|i| pads.open(i).ok())
+        .collect();
+    let mut touch = nibkit::touch::Panel::open();
+    let path = match &args.rom {
+        Some(p) => p.clone(),
+        None => match pick(&mut video, &mut events, &mut touch) {
+            Some(p) => p,
+            None => return Ok(()),
+        },
+    };
+
+    let (rom, _) = rom::load(&path)?;
+    let stem = rom::stem(&path);
     let header = inkdot_core::Header::parse(rom.get(..0x150).ok_or("not a Game Boy ROM")?);
     let console = if header.supports_cgb() { "GBC" } else { "GB" };
-    let settings_file = nibkit::paths::AppDirs::new("inkdot")
-        .config
-        .join("settings.toml");
     let options = Options::new(
         console,
         &stem,
         args.options.clone(),
-        Settings::load(settings_file),
+        Settings::load(options::settings_file()),
     );
     let look = if console == "GB" {
         Look::parse(&options.str("look")).unwrap_or(Look::Color)
@@ -214,23 +231,20 @@ fn run(args: args::Args) -> Result<(), String> {
     let dir = args
         .saves
         .clone()
-        .unwrap_or_else(|| args.rom.parent().map(Path::to_path_buf).unwrap_or_default());
+        .unwrap_or_else(|| saves::default_dir(console, &stem));
     let files = SaveFiles::new(dir, &stem);
-    if let Ok(ram) = std::fs::read(files.battery()) {
+    if let Some(ram) = files.read_battery() {
         gb.hw.cart.load_ram(&ram);
     }
     if let Ok(clock) = std::fs::read(files.clock()) {
         gb.hw.cart.rtc_load(&clock, saves::unix_now());
     }
 
-    let sdl = sdl2::init()?;
-    let video_sys = sdl.video()?;
-    let video = Video::open(&video_sys)?;
     let audio = sdl.audio().ok().and_then(|a| {
         let spec = AudioSpecDesired {
-            freq: Some(48_000),
+            freq: Some(nibkit::audio::ADVICE.rate as i32),
             channels: Some(2),
-            samples: Some(512),
+            samples: Some(AUDIO_BUFFER as u16),
         };
         let q: Result<AudioQueue<i16>, _> = a.open_queue(None, &spec);
         q.inspect_err(|e| eprintln!("inkdot: no sound: {e}")).ok()
@@ -238,15 +252,10 @@ fn run(args: args::Args) -> Result<(), String> {
     if let Some(q) = &audio {
         q.resume();
     }
-    let pads = sdl.game_controller()?;
-    for file in nibkit::input::CONTROLLER_MAPPINGS {
-        let _ = pads.load_mappings(file);
-    }
-    let _pads: Vec<GameController> = (0..pads.num_joysticks().unwrap_or(0))
-        .filter_map(|i| pads.open(i).ok())
-        .collect();
-    let mut touch = nibkit::touch::Panel::open();
-
+    // What the device took, which the sound is made at.
+    let out_rate = audio
+        .as_ref()
+        .map_or(nibkit::audio::ADVICE.rate, |q| q.spec().freq as u32) as f64;
     let mut app = App {
         gb,
         options,
@@ -261,6 +270,7 @@ fn run(args: args::Args) -> Result<(), String> {
         model: ui::Model::default(),
         pacer: Pacer::new(nibkit::screens::REFRESH_HZ),
         rate: RateControl::new(AUDIO_TARGET),
+        out_rate,
         samples: Vec::new(),
         rgba: vec![0; 160 * 144 * 4],
         colors: Vec::new(),
@@ -293,7 +303,13 @@ fn run(args: args::Args) -> Result<(), String> {
     }
     app.refresh_model();
     let vblank = nibkit::vblank::Vblank::open().ok();
-    let mut events = sdl.event_pump()?;
+    let play_clamp = Debug::from_env().clamp.unwrap_or(perf::PLAY);
+    if !perf::clamp_min(play_clamp) {
+        eprintln!(
+            "inkdot: no utilization clamp (kernel without uclamp): schedutil decides the clock"
+        );
+    }
+    let mut clamped_for_menu = false;
     let mut pointers = Vec::new();
     while !app.quit {
         // Wait for the top panel's vblank, then until the latest moment that still leaves time
@@ -317,6 +333,15 @@ fn run(args: args::Args) -> Result<(), String> {
         let work = Instant::now();
         for event in events.poll_iter() {
             app.event(event);
+        }
+        // Paused in the menu, the clock may fall as it likes (perf.rs).
+        if app.ui.menu != clamped_for_menu {
+            clamped_for_menu = app.ui.menu;
+            perf::clamp_min(if clamped_for_menu {
+                perf::MENU
+            } else {
+                play_clamp
+            });
         }
         if let Some(panel) = &mut touch {
             pointers.clear();
@@ -515,7 +540,7 @@ impl App {
         self.last_touch = Instant::now();
         match self.backlight {
             Backlight::Dim(p) => nibkit::backlight::set(Screen::Bottom, p),
-            Backlight::Off => set_screen_off(Screen::Bottom, false),
+            Backlight::Off => nibkit::backlight::set_off(Screen::Bottom, false),
             Backlight::Lit => {}
         }
         self.backlight = Backlight::Lit;
@@ -696,9 +721,9 @@ impl App {
                 self.gb.run_frame();
             }
             let base = if self.options.str("speed") == "exact" {
-                48_000.0
+                self.out_rate
             } else {
-                self.pacer.locked_rate(48_000.0)
+                self.pacer.locked_rate(self.out_rate)
             };
             let queued = self.audio.as_ref().map_or(AUDIO_TARGET, |q| q.size() / 4);
             let rate = self.rate.rate(base, queued);
@@ -828,7 +853,7 @@ impl App {
         }
         match self.options.str("bottom").as_str() {
             "off" => {
-                set_screen_off(Screen::Bottom, true);
+                nibkit::backlight::set_off(Screen::Bottom, true);
                 self.backlight = Backlight::Off;
             }
             "dim" => {
@@ -901,11 +926,10 @@ impl App {
         let console = self.console;
         m.options = self
             .options
-            .defs()
-            .map(|o| o.def.key.trim_start_matches("inkdot.").to_owned())
-            .collect::<Vec<_>>()
+            .keys()
             .into_iter()
             .map(|key| {
+                let key = key.to_owned();
                 let (current, source) = self.options.get(&key);
                 OptionRow {
                     label: self.options.label(&key),
@@ -924,16 +948,73 @@ impl App {
     }
 }
 
-/// Writes or clears a screen's "off" (nibOS's bl_power knob, AGENTS.md "Screen off"). Ignored
-/// where the knob isn't there.
-fn set_screen_off(screen: Screen, off: bool) {
-    let name = match screen {
-        Screen::Top => "top",
-        Screen::Bottom => "bottom",
+/// Without a ROM on the command line: the list of games on the cards, until one is chosen
+/// (`None`: the player left, or SIGTERM).
+fn pick(
+    video: &mut Video,
+    events: &mut sdl2::EventPump,
+    touch: &mut Option<nibkit::touch::Panel>,
+) -> Option<PathBuf> {
+    let mut picker = picker::Picker::new(picker::find(&nibkit::paths::rom_roots()));
+    let blank = vec![0u8; 160 * 144 * 4];
+    let look = LcdLook {
+        persistence: 0.0,
+        grid: false,
+        gap: [0; 3],
+        surround: [0; 3],
     };
-    let path = PathBuf::from(format!("/run/nibos/backlight/{name}/bl_power"));
-    if path.exists() {
-        let _ = std::fs::write(path, if off { "4" } else { "0" });
+    let mut pointers = Vec::new();
+    loop {
+        if TERM.load(Ordering::Relaxed) {
+            return None;
+        }
+        let mut start = None;
+        for event in events.poll_iter() {
+            match event {
+                Event::Quit { .. } => return None,
+                Event::KeyDown {
+                    keycode: Some(k), ..
+                } => {
+                    let name = k.name();
+                    if nibkit::input::BACK_KEYCODES.contains(&name.as_str()) || name == "Escape" {
+                        return None;
+                    }
+                }
+                Event::ControllerButtonDown { button, .. } => match pad_of(button) {
+                    Some(Pad::Up) => picker.step(-1),
+                    Some(Pad::Down) => picker.step(1),
+                    Some(Pad::Left | Pad::L) => picker.step(-picker::Picker::page()),
+                    Some(Pad::Right | Pad::R) => picker.step(picker::Picker::page()),
+                    Some(Pad::A | Pad::Start) => start = Some(picker.chosen),
+                    Some(Pad::B) => return None,
+                    _ => {}
+                },
+                Event::MouseButtonDown { x, y, .. } => {
+                    start = video
+                        .bottom_point(x, y)
+                        .and_then(|(fx, fy)| picker.at(fx, fy));
+                }
+                _ => {}
+            }
+        }
+        if let Some(panel) = touch {
+            pointers.clear();
+            panel.poll(&mut pointers);
+            for p in pointers.drain(..) {
+                if let nibkit::touch::Pointer::Down(x, y) = p {
+                    start = picker.at(x, y).or(start);
+                }
+            }
+        }
+        if let Some(game) = start.and_then(|i| picker.games.get(i)) {
+            return Some(game.path.clone());
+        }
+        if let Some(px) = picker.render() {
+            video.upload_ui(px);
+        }
+        video.upload_frame(&blank);
+        video.present_top(look, false);
+        video.present_bottom();
     }
 }
 

@@ -1,90 +1,77 @@
-//! The command line: `inkdot [OPTIONS] [--saves DIR] [--boot-rom FILE] [--model dmg|cgb] ROM`.
+//! The command line: `inkdot [OPTIONS] [--saves DIR] [--boot-rom FILE] [--model dmg|cgb] [ROM]`.
 //!
-//! The game options (`--look gameboy`, `--no-lcd`, ...) are the ones inkdot declares to DSlot
-//! in its description file, `packaging/nibos/inkdot.toml`, which is built in and read here the
-//! same way DSlot reads it (nibkit's `dslot` module): what DSlot offers in its menu and passes
-//! as `{options}` is exactly what inkdot understands.
+//! Without a ROM, inkdot shows the games it finds and lets the player pick one (as when it is
+//! started from the stock OS's Apps). The game options (`--look gameboy`, `--no-lcd`, ...) are
+//! those in [`crate::options::SPECS`]; DSlot passes the same ones, from its description of inkdot.
 
-use nibkit::dslot::{check, Emulator};
+use crate::options::{Takes, SPECS};
 use nibkit::settings::Value;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
-
-/// inkdot's description for DSlot, as packaged.
-pub const DESCRIPTION: &str = include_str!("../../../packaging/nibos/inkdot.toml");
-
-/// The description, parsed.
-pub fn description() -> Emulator {
-    check("inkdot", DESCRIPTION).expect("packaging/nibos/inkdot.toml is a valid description")
-}
 
 /// Which console to be, when the game would run on either.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ModelChoice {
     /// As the options say (the Look of a DMG game).
     Auto,
-    /// A DMG, whatever the look.
     Dmg,
-    /// A CGB.
     Cgb,
 }
 
 /// What the command line asked for.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Args {
-    pub rom: PathBuf,
-    /// The game's saves folder (DSlot makes it); else next to the ROM.
+    /// The game; `None` to pick one.
+    pub rom: Option<PathBuf>,
+    /// The game's saves folder (DSlot makes one); else the system's saves folder for it.
     pub saves: Option<PathBuf>,
     pub boot_rom: Option<PathBuf>,
     pub model: ModelChoice,
-    /// Game options given, by their key in the description (`look`, `lcd`, ...).
+    /// Game options given, by key (`look`, `lcd`, ...).
     pub options: BTreeMap<String, Value>,
 }
 
 /// Usage, for `--help` and mistakes.
 pub fn usage() -> String {
     let mut s = String::from(
-        "usage: inkdot [OPTIONS] [--saves DIR] [--boot-rom FILE] [--model dmg|cgb] ROM\n\n\
-         ROM is a .gb or .gbc file, or a .zip with one in it.\n\
-         --saves DIR      where battery saves and save states go (default: next to the ROM)\n\
+        "usage: inkdot [OPTIONS] [--saves DIR] [--boot-rom FILE] [--model dmg|cgb] [ROM]\n\n\
+         ROM is a .gb or .gbc file, or a .zip with one in it; without one, inkdot lists the\n\
+         games it finds and you pick one.\n\
+         --saves DIR      where battery saves and save states go (default: the system's saves\n\
+         \x20                folder, <saves>/GB or GBC/<game>/)\n\
          --boot-rom FILE  run this boot ROM first (your own dump; none is included)\n\
          --model dmg|cgb  the console to be, overriding the look\n\nOptions:\n",
     );
-    for o in &description().options {
-        let key = o.def.key.trim_start_matches("inkdot.");
-        let values = match &o.def.kind {
-            nibkit::settings::Kind::Choice(c) => c
-                .iter()
-                .map(|(v, _)| v.as_str().unwrap_or("?").to_owned())
-                .collect::<Vec<_>>()
-                .join("|"),
-            nibkit::settings::Kind::Toggle => format!("(--{key} / --no-{key})"),
-            nibkit::settings::Kind::Number { min, max, .. } => format!("{min}..{max}"),
+    for o in SPECS {
+        let values = match o.takes {
+            Takes::Choice(c) => c.iter().map(|(v, _)| *v).collect::<Vec<_>>().join("|"),
+            Takes::Toggle => format!("--{0} / --no-{0}", o.key),
+            Takes::Number { min, max, .. } => format!("{min}..{max}"),
         };
-        s += &format!("  {key:<8} {:<26} {values}\n", o.def.label);
+        s += &format!("  --{:<8} {:<26} {values}\n", o.key, o.label);
     }
     s
 }
 
 /// Reads the arguments (without the program's name).
 pub fn parse(words: &[String]) -> Result<Args, String> {
-    let emulator = description();
     let mut args = Args {
-        rom: PathBuf::new(),
+        rom: None,
         saves: None,
         boot_rom: None,
         model: ModelChoice::Auto,
         options: BTreeMap::new(),
     };
-    let mut rom = None;
     let mut i = 0;
     while i < words.len() {
         let rest = &words[i..];
-        if let Some((n, key, value)) = emulator.options.iter().find_map(|o| {
-            o.recognise(rest)
-                .map(|(n, v)| (n, o.def.key.trim_start_matches("inkdot.").to_owned(), v))
-        }) {
-            args.options.insert(key, value);
+        if let Some(found) = SPECS
+            .iter()
+            .find_map(|o| o.recognise(rest).map(|r| (o.key, r)))
+        {
+            let (key, result) = found;
+            let (n, value) = result?;
+            args.options.insert(key.to_owned(), value);
             i += n;
             continue;
         }
@@ -106,7 +93,7 @@ pub fn parse(words: &[String]) -> Result<Args, String> {
             }
             w if w.starts_with("--") => return Err(format!("unknown option {w}")),
             w => {
-                if rom.replace(PathBuf::from(w)).is_some() {
+                if args.rom.replace(PathBuf::from(w)).is_some() {
                     return Err("more than one ROM".into());
                 }
                 i += 1;
@@ -115,7 +102,6 @@ pub fn parse(words: &[String]) -> Result<Args, String> {
         }
         i += 2;
     }
-    args.rom = rom.ok_or("no ROM given")?;
     Ok(args)
 }
 
@@ -128,16 +114,21 @@ mod tests {
     }
 
     #[test]
-    fn dslots_command_line() {
+    fn a_full_command_line() {
         let a = parse(&words(
             "--look pocket --no-lcd --fast 6 --saves /s/GB/Tetris /r/Tetris.gb",
         ))
         .unwrap();
-        assert_eq!(a.rom, PathBuf::from("/r/Tetris.gb"));
+        assert_eq!(a.rom, Some(PathBuf::from("/r/Tetris.gb")));
         assert_eq!(a.saves, Some(PathBuf::from("/s/GB/Tetris")));
         assert_eq!(a.options["look"], Value::from("pocket"));
         assert_eq!(a.options["lcd"], Value::Boolean(false));
         assert_eq!(a.options["fast"], Value::Integer(6));
+    }
+
+    #[test]
+    fn no_rom_is_allowed() {
+        assert_eq!(parse(&[]).unwrap().rom, None);
     }
 
     #[test]
@@ -146,18 +137,52 @@ mod tests {
         assert!(parse(&words("--fast 20 a.gb")).is_err());
         assert!(parse(&words("a.gb b.gb")).is_err());
         assert!(parse(&words("--saves")).is_err());
-        assert!(parse(&words("--lcd")).is_err());
+        assert!(parse(&words("--sepia a.gb")).is_err());
     }
 
     #[test]
     fn every_option_is_in_the_usage() {
         let u = usage();
-        for o in description().options {
-            assert!(
-                u.contains(o.def.key.trim_start_matches("inkdot.")),
-                "{}",
-                o.def.key
-            );
+        for o in SPECS {
+            assert!(u.contains(&format!("--{}", o.key)), "{}", o.key);
+        }
+    }
+
+    /// The description DSlot reads declares exactly inkdot's options, with the same values,
+    /// defaults and command-line forms.
+    #[cfg(feature = "dslot")]
+    #[test]
+    fn the_dslot_description_matches() {
+        let text = include_str!("../../../packaging/nibos/inkdot.toml");
+        let emulator = nibkit::dslot::check("inkdot", text).expect("a valid description");
+        assert_eq!(emulator.options.len(), SPECS.len());
+        for (o, spec) in emulator.options.iter().zip(SPECS) {
+            assert_eq!(o.def, spec.def(), "{}", spec.key);
+            for console in ["GB", "GBC"] {
+                assert_eq!(
+                    o.applies(console),
+                    spec.applies(console),
+                    "{} on {console}",
+                    spec.key
+                );
+            }
+            // DSlot's words for each value are what inkdot reads back.
+            for (value, _) in crate::options::Options::new(
+                "GB",
+                "x",
+                BTreeMap::new(),
+                nibkit::settings::Settings::load(std::env::temp_dir().join("inkdot-desc.toml")),
+            )
+            .values(spec.key)
+            {
+                let w = o.words(&value);
+                assert_eq!(
+                    spec.recognise(&w),
+                    Some(Ok((w.len(), value.clone()))),
+                    "{} {value}",
+                    spec.key
+                );
+            }
         }
     }
 }

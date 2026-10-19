@@ -46,9 +46,18 @@ main loop:  wait for the top panel's vblank (nibkit::vblank)
             battery RAM a second after the game writes it (a thread)         saves.rs
 ```
 
-The options are declared once, in `packaging/nibos/inkdot.toml`: DSlot reads it to show them,
-and inkdot builds it in and parses it with the same code (nibkit's `dslot` module) to read its
-command line.
+The options are declared once in inkdot, `options::SPECS`: the command line, the Options page
+and the settings file all come from it. Settings are `inkdot.<option>` at console and game level
+in a nibkit settings file: DSlot's own (with the `dslot` feature, under DSlot), else inkdot's.
+`packaging/nibos/inkdot.toml` is DSlot's description of the same options; a test (with `dslot`)
+holds the two together. Without a ROM, `picker.rs` lists the games on the cards first.
+
+The system is chosen at build time, by nibkit's features `nibos` or `stock`, which give the
+paths, the screens' layout and the sound's rate. nibOS has a display per panel, so a window on
+each; the stock OS's Weston spans both panels with one display, so one window, with the top
+screen in its left half and the bottom in its right. Where the stock OS lacks what nibOS gives
+(the panel's vblank, backlight power, apps setting brightness), inkdot falls back: the swap's
+own sync, a bottom screen left lit, the stock keys.
 
 ## Known gaps
 

@@ -2,3 +2,5 @@
 /tests/roms/
 /config.local.sh
 /packaging/nibos/out/
+/sysroot/
+/dist/

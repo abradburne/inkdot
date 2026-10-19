@@ -551,6 +551,11 @@ MBC5 rumble carts (needs nibOS's rumble interface), rewind (a ring of compressed
 is ~50 KB), MBC6/MBC7 (tilt via the stick)/HuC1/HuC3/MMM01, our own open boot ROM with our own
 start-up animation, cheats.
 
+An efficiency comparison, for our own use only: CPU time per frame, its spread, and power from the
+rk817 gauge, against other emulators run as black boxes on the same games, with each one's
+accuracy stated alongside. Internal data; inkdot's documents keep measuring against inkdot's own
+targets.
+
 ## Decisions
 
 For the user:
