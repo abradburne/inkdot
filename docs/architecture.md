@@ -48,7 +48,9 @@ main loop:  wait for the top panel's vblank (nibkit::vblank)
 
 The options are declared once in inkdot, `options::SPECS`: the command line, the Options page
 and the settings file all come from it. Settings are `inkdot.<option>` at console and game level
-in a nibkit settings file: DSlot's own (with the `dslot` feature, under DSlot), else inkdot's.
+in a nibkit settings file: DSlot's own with the `dslot` feature (each option DSlot shows lives
+there and nowhere else; inkdot loads it at the game's start and saves on each change, and DSlot
+re-reads it when inkdot exits), else inkdot's. Flags DSlot passes carry the same values.
 `packaging/nibos/inkdot.toml` is DSlot's description of the same options; a test (with `dslot`)
 holds the two together. Without a ROM, `picker.rs` lists the games on the cards first.
 

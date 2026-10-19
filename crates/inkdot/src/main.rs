@@ -582,6 +582,16 @@ impl App {
                     self.apply_look();
                 }
             }
+            Action::Reset { for_game } => {
+                self.options.reset(for_game);
+                self.apply_look();
+                let text = if for_game {
+                    "Game's options cleared".to_owned()
+                } else {
+                    format!("All {}: options cleared", self.console)
+                };
+                self.toast(&text);
+            }
             Action::ToggleFast => self.fast = !self.fast,
             Action::Brightness { top, percent } => {
                 let screen = if top { Screen::Top } else { Screen::Bottom };

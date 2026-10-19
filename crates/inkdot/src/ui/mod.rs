@@ -32,6 +32,10 @@ pub enum Action {
         value: nibkit::settings::Value,
         for_game: bool,
     },
+    /// Clear the options set for this game, or for its console.
+    Reset {
+        for_game: bool,
+    },
     ToggleFast,
     Brightness {
         top: bool,
@@ -315,6 +319,16 @@ impl Ui {
                         action: None,
                     });
                 }
+                w.push(Widget {
+                    rect: Rect::new(W - 32 - 2 * 200 - 160, 12, 148, 64),
+                    kind: Kind::Tab {
+                        label: "Reset".into(),
+                        on: false,
+                    },
+                    action: Some(Action::Reset {
+                        for_game: m.for_game,
+                    }),
+                });
                 let n = m.looks.len().max(1) as i32;
                 let gap = 16;
                 let tw = (W - 64 - (n - 1) * gap) / n;
@@ -361,6 +375,16 @@ impl Ui {
                         action: None,
                     });
                 }
+                w.push(Widget {
+                    rect: Rect::new(W - 32 - 2 * 200 - 160, 12, 148, 64),
+                    kind: Kind::Tab {
+                        label: "Reset".into(),
+                        on: false,
+                    },
+                    action: Some(Action::Reset {
+                        for_game: m.for_game,
+                    }),
+                });
                 let rows: Vec<usize> = (0..m.options.len())
                     .filter(|&i| {
                         !matches!(
@@ -443,6 +467,7 @@ impl Ui {
                 self.go(Page::Options);
                 None
             }
+            Kind::Tab { label, .. } if label == "Reset" => w.action.clone(),
             Kind::Tab { label, .. } => {
                 if label == "Load" || label == "Save" {
                     self.states_saving = label == "Save";

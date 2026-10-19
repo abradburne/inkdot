@@ -35,10 +35,12 @@ wakes it without doing anything else.
 
 Each option can be set for one game or for all of its console's games (the two buttons at the top
 of the Look and Options pages); DSlot's menu has the same options per console and per game. An
-option given on the command line wins for that run.
+option given on the command line wins for that run. **Reset** clears what is set at that level,
+so the console's setting, or else the default, applies again.
 
-The choices are kept in `settings.toml`: DSlot's own settings file when inkdot runs under DSlot,
-else inkdot's (`~/.config/inkdot/` on nibOS, beside the program on the stock OS).
+The choices are kept in `settings.toml`. In the nibOS package (built with DSlot's part) that is
+DSlot's own file, however inkdot is started, so DSlot's menu and inkdot's agree; otherwise it is
+inkdot's (`~/.config/inkdot/`, or beside the program on the stock OS).
 
 | Option | | Default |
 |---|---|---|

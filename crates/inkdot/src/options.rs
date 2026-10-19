@@ -224,10 +224,12 @@ impl Source {
     }
 }
 
-/// The settings file: DSlot's when built for DSlot and DSlot has one, else inkdot's own.
+/// The settings file. Built for DSlot, where DSlot has one (on nibOS), DSlot's: each option DSlot
+/// shows lives there and nowhere else (DSlot's docs/emulators.md, "One place for each option"),
+/// so inkdot started by hand sees the same choices. Else inkdot's own.
 pub fn settings_file() -> PathBuf {
     #[cfg(feature = "dslot")]
-    if let Some(file) = nibkit::dslot::settings_file().filter(|f| f.exists()) {
+    if let Some(file) = nibkit::dslot::settings_file() {
         return file;
     }
     nibkit::paths::AppDirs::new("inkdot")
@@ -287,22 +289,43 @@ impl Options {
         if let Some(v) = self.changed.get(key) {
             return (v.clone(), Source::Menu);
         }
-        if let Some(v) = self.given.get(key).filter(ok) {
-            return (v.clone(), Source::Launch);
-        }
         let full = Self::full(key);
         let game = Scope::Game(Scope::game_key(&self.console, &self.rom_name));
-        if let Some(v) = self.settings.get(&game, &full).filter(ok) {
-            return (v.clone(), Source::Game);
+        let console = Scope::Console(self.console.clone());
+        let kept = if let Some(v) = self.settings.get(&game, &full).filter(ok) {
+            (v.clone(), Source::Game)
+        } else if let Some(v) = self.settings.get(&console, &full).filter(ok) {
+            (v.clone(), Source::Console)
+        } else {
+            (spec.default_value(), Source::Default)
+        };
+        // DSlot passes the file's values as flags too: those are still the file's.
+        match self.given.get(key).filter(ok) {
+            Some(v) if *v != kept.0 => (v.clone(), Source::Launch),
+            _ => kept,
         }
-        if let Some(v) = self
-            .settings
-            .get(&Scope::Console(self.console.clone()), &full)
-            .filter(ok)
-        {
-            return (v.clone(), Source::Console);
+    }
+
+    /// Clears every option set for the game, or for its console: each falls back to the next
+    /// level, then to its default (DSlot's menu shows that as "inkdot's own").
+    pub fn reset(&mut self, for_game: bool) {
+        let scope = if for_game {
+            Scope::Game(Scope::game_key(&self.console, &self.rom_name))
+        } else {
+            Scope::Console(self.console.clone())
+        };
+        for spec in SPECS {
+            self.settings.reset(&scope, &Self::full(spec.key));
         }
-        (spec.default_value(), Source::Default)
+        // What the command line or the menu gave this run no longer stands either.
+        self.changed.clear();
+        self.given.clear();
+        if let Err(e) = self.settings.save() {
+            eprintln!(
+                "inkdot: cannot save settings to {}: {e}",
+                self.settings.file().display()
+            );
+        }
     }
 
     pub fn str(&self, key: &str) -> String {
@@ -404,6 +427,56 @@ mod tests {
             Settings::load(o.settings.file()),
         );
         assert_eq!(again.get("fast"), (Value::Integer(6), Source::Console));
+    }
+
+    #[test]
+    fn written_as_dslot_reads_them() {
+        let mut o = options("dslot-form", &[]);
+        o.set("look", "pocket".into(), true);
+        o.set("fast", Value::Integer(3), false);
+        let text = std::fs::read_to_string(o.settings.file()).unwrap();
+        let s = Settings::load(o.settings.file());
+        assert_eq!(
+            s.get(&Scope::Game("GB/Tetris (World)".into()), "inkdot.look"),
+            Some(&Value::from("pocket")),
+            "{text}"
+        );
+        assert_eq!(
+            s.get(&Scope::Console("GB".into()), "inkdot.fast"),
+            Some(&Value::Integer(3))
+        );
+        assert_eq!(
+            s.get(&Scope::System, "inkdot.fast"),
+            None,
+            "never at system level"
+        );
+    }
+
+    #[test]
+    fn a_flag_with_the_files_value_is_the_files() {
+        let mut o = options("flag-same", &[]);
+        o.set("fast", Value::Integer(6), false);
+        let file = o.settings.file().to_owned();
+        let given = [("fast".to_owned(), Value::Integer(6))].into();
+        let again = Options::new("GB", "Tetris (World)", given, Settings::load(&file));
+        assert_eq!(again.get("fast"), (Value::Integer(6), Source::Console));
+        let given = [("fast".to_owned(), Value::Integer(2))].into();
+        let other = Options::new("GB", "Tetris (World)", given, Settings::load(file));
+        assert_eq!(other.get("fast"), (Value::Integer(2), Source::Launch));
+    }
+
+    #[test]
+    fn reset_falls_back_a_level() {
+        let mut o = options("reset", &[("lcd", Value::Boolean(false))]);
+        o.set("fast", Value::Integer(6), false);
+        o.set("fast", Value::Integer(8), true);
+        o.reset(true);
+        assert_eq!(o.get("fast"), (Value::Integer(6), Source::Console));
+        assert_eq!(o.get("lcd"), (Value::Boolean(true), Source::Default));
+        o.reset(false);
+        assert_eq!(o.get("fast").1, Source::Default);
+        let again = Settings::load(o.settings.file());
+        assert_eq!(again.get(&Scope::Console("GB".into()), "inkdot.fast"), None);
     }
 
     #[test]
