@@ -13,6 +13,8 @@ hardware behaviour names its source section in its body. Add a row before using 
 | Pan Docs | https://gbdev.io/pandocs/ | Memory map, I/O registers, CPU instruction set and timings, PPU modes and pixel FIFO, APU, timer, DMA/HDMA, CGB registers and double speed, MBCs and RTC, power-up state, compatibility palettes, cartridge header | CC0 (gbdev/pandocs repository) |
 | Game Boy: Complete Technical Reference (Gekkio) | https://github.com/Gekkio/gb-ctr | SM83 per-M-cycle bus activity, interrupt dispatch, timer edge behaviour | CC BY-SA 4.0 |
 | The Cycle-Accurate Game Boy Docs (AntonioND) | https://github.com/AntonioND/giibiiadvance/tree/master/docs | Timer, interrupt, PPU and DMA timing details (the docs only, not the emulator in the same repository) | per the document |
+| The Cutting Room Floor, "Notes:Game Boy Color Bootstrap ROM" | https://tcrf.net/Notes:Game_Boy_Color_Bootstrap_ROM, read from the Internet Archive's copy of 2026-09-18 (web.archive.org/web/20260918011510) because the live site's bot check blocks scripts | The CGB's compatibility palettes: the title-checksum table and the twelve palettes chosen by buttons at boot (data, converted from its 24-bit colours) | CC BY 3.0 (TCRF's content licence) |
+| Mooneye test sources (`*.s`) | https://github.com/Gekkio/mooneye-test-suite | What each test measures and its expected tables (`lcdon_timing`, `lcdon_write_timing`, `intr_2_mode0_timing_sprites`), which the PPU's timing was fitted to | MIT |
 | gbdev.io resources list | https://gbdev.io/resources.html | Finding the documents and test suites above | — |
 
 ## Test ROMs and test vectors

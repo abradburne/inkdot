@@ -76,6 +76,12 @@ impl GameBoy {
             };
         }
         hw.post_boot();
+        if cgb && !cgb_mode {
+            let [bg, obj0, obj1] = crate::compat::for_header(&header);
+            hw.ppu.set_palette(false, 0, bg);
+            hw.ppu.set_palette(true, 0, obj0);
+            hw.ppu.set_palette(true, 1, obj1);
+        }
         Ok(GameBoy { cpu, hw, model })
     }
 

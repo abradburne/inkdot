@@ -10,6 +10,7 @@ extern crate alloc;
 
 pub mod apu;
 pub mod cart;
+pub mod compat;
 pub mod cpu;
 mod gameboy;
 pub mod hw;

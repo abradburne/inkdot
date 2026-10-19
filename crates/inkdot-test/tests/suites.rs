@@ -92,3 +92,44 @@ fn blargg_cpu_and_timing() {
     assert_all_pass(&roms, Model::Dmg, Protocol::Blargg, 60);
     assert_all_pass(&roms, Model::Cgb, Protocol::Blargg, 60);
 }
+
+fn acid2(rom: &str, reference: &str, model: Model) {
+    let (Some(rom), Some(reference)) = (fetched(rom), fetched(reference)) else {
+        return;
+    };
+    let wrong = inkdot_test::compare_with_reference(&rom, model, &reference);
+    assert!(
+        wrong.is_empty(),
+        "{} pixels differ from {}, first at {:?}",
+        wrong.len(),
+        reference.display(),
+        &wrong[..wrong.len().min(8)]
+    );
+}
+
+#[test]
+fn dmg_acid2_on_dmg() {
+    acid2(
+        "dmg-acid2/dmg-acid2.gb",
+        "dmg-acid2-ref/reference-dmg.png",
+        Model::Dmg,
+    );
+}
+
+#[test]
+fn dmg_acid2_on_cgb() {
+    acid2(
+        "dmg-acid2/dmg-acid2.gb",
+        "dmg-acid2-cgb-ref/reference-cgb.png",
+        Model::Cgb,
+    );
+}
+
+#[test]
+fn cgb_acid2() {
+    acid2(
+        "cgb-acid2/cgb-acid2.gbc",
+        "cgb-acid2-ref/reference.png",
+        Model::Cgb,
+    );
+}

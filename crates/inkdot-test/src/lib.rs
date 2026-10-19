@@ -156,3 +156,83 @@ fn run_mooneye(gb: &mut GameBoy, seconds: u32) -> Outcome {
     }
     Outcome::Timeout(String::new())
 }
+
+/// The picture as 8-bit RGB, converted the way the acid2 suites' reference images were made:
+/// DMG shades as $FF $AA $55 $00, CGB colours with each 5-bit component as `(c << 3) | (c >> 2)`.
+pub fn frame_rgb(gb: &GameBoy) -> Vec<[u8; 3]> {
+    let color = gb.hw.ppu.is_color();
+    gb.frame()
+        .iter()
+        .map(|&p| {
+            if color {
+                let c = |shift: u16| {
+                    let v = ((p >> shift) & 0x1f) as u8;
+                    (v << 3) | (v >> 2)
+                };
+                [c(0), c(5), c(10)]
+            } else {
+                let g = [0xff, 0xaa, 0x55, 0x00][p as usize & 3];
+                [g, g, g]
+            }
+        })
+        .collect()
+}
+
+/// Reads a PNG as 8-bit RGB pixels.
+pub fn read_png(path: &Path) -> (u32, u32, Vec<[u8; 3]>) {
+    let mut decoder = png::Decoder::new(std::fs::File::open(path).expect("open PNG"));
+    decoder.set_transformations(png::Transformations::EXPAND | png::Transformations::STRIP_16);
+    let mut reader = decoder.read_info().expect("PNG header");
+    let mut buf = vec![0; reader.output_buffer_size()];
+    let info = reader.next_frame(&mut buf).expect("PNG data");
+    let channels = info.color_type.samples();
+    let pixels = buf[..info.buffer_size()]
+        .chunks(channels)
+        .map(|c| {
+            if channels < 3 {
+                [c[0], c[0], c[0]]
+            } else {
+                [c[0], c[1], c[2]]
+            }
+        })
+        .collect();
+    (info.width, info.height, pixels)
+}
+
+/// Runs a ROM until it executes `LD B,B` (how the acid2 suites say they are done) or for
+/// `seconds`, then two more frames so the last picture is complete, and compares the picture
+/// with a reference image. Returns the pixels that differ, as (x, y).
+pub fn compare_with_reference(rom: &Path, model: Model, reference: &Path) -> Vec<(usize, usize)> {
+    let mut gb = boot(rom, model);
+    let end = gb.hw.dots + 10 * SECOND;
+    while gb.hw.dots < end {
+        let at_ld_b_b = gb.hw.peek(gb.cpu.pc) == 0x40;
+        gb.step();
+        if at_ld_b_b {
+            break;
+        }
+    }
+    gb.run_frame();
+    gb.run_frame();
+    let (w, h, want) = read_png(reference);
+    assert_eq!(
+        (w, h),
+        (160, 144),
+        "{}: not a 160x144 picture",
+        reference.display()
+    );
+    let got = frame_rgb(&gb);
+    (0..want.len())
+        .filter(|&i| got[i] != want[i])
+        .map(|i| (i % 160, i / 160))
+        .collect()
+}
+
+/// Writes the picture to a PNG, for looking at a failure.
+pub fn write_png(gb_rgb: &[[u8; 3]], path: &Path) {
+    let file = std::fs::File::create(path).expect("create PNG");
+    let mut enc = png::Encoder::new(std::io::BufWriter::new(file), 160, 144);
+    enc.set_color(png::ColorType::Rgb);
+    let mut w = enc.write_header().expect("PNG header");
+    w.write_image_data(&gb_rgb.concat()).expect("PNG data");
+}

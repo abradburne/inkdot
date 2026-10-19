@@ -60,6 +60,8 @@ fetch dmg-acid2 https://github.com/mattcurrie/dmg-acid2/releases/download/v1.0/d
     464e14b7d42e7feea0b7ede42be7071dc88913f75b9ffa444299424b63d1dff1 file
 fetch dmg-acid2-ref https://raw.githubusercontent.com/mattcurrie/dmg-acid2/master/img/reference-dmg.png \
     ca966d50895c7efef05838590d148c2cbfd7fba57dab986f25b35b4da71abb57 file
+fetch dmg-acid2-cgb-ref https://raw.githubusercontent.com/mattcurrie/dmg-acid2/master/img/reference-cgb.png \
+    cbf039fd613a6db3c3d830a6a1d887efbc892aea4578ffc569b61f66a9e07ced file
 fetch cgb-acid2 https://github.com/mattcurrie/cgb-acid2/releases/download/v1.1/cgb-acid2.gbc \
     197fb0bcec544f0400527fc707e0a94f55435974986e6986b424ace5de81720e file
 fetch cgb-acid2-ref https://raw.githubusercontent.com/mattcurrie/cgb-acid2/master/img/reference.png \
