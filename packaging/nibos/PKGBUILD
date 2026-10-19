@@ -32,7 +32,7 @@ pkgver() {
 prepare() {
     rm -rf "$srcdir/inkdot" "$srcdir/nibos"
     mkdir -p "$srcdir/inkdot/packaging/nibos"
-    cp -r "$_root"/{Cargo.toml,Cargo.lock,.cargo,crates,assets,README.md,CHANGELOG.md,LICENSE-MIT,LICENSE-APACHE,docs} "$srcdir/inkdot/"
+    cp -r "$_root"/{Cargo.toml,Cargo.lock,.cargo,crates,README.md,CHANGELOG.md,LICENSE-MIT,LICENSE-APACHE,LICENSE-OFL,docs} "$srcdir/inkdot/"
     # Installed for DSlot, and checked against the program's options by a test.
     cp "$_root/packaging/nibos/inkdot.toml" "$srcdir/inkdot/packaging/nibos/"
     # Where Cargo.toml looks for it: ../nibos/sdk/nibkit.
@@ -59,4 +59,6 @@ package() {
     install -Dm644 packaging/nibos/inkdot.toml "$pkgdir/usr/share/dslot/emulators/inkdot.toml"
     install -Dm644 -t "$pkgdir/usr/share/doc/inkdot" README.md CHANGELOG.md docs/*.md
     install -Dm644 -t "$pkgdir/usr/share/licenses/inkdot" LICENSE-MIT LICENSE-APACHE
+    # The Roboto Condensed fonts built in (through nibkit) are under the SIL OFL 1.1.
+    install -Dm644 LICENSE-OFL "$pkgdir/usr/share/licenses/inkdot/OFL.txt"
 }

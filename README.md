@@ -59,5 +59,7 @@ packaging/stock/package.sh     # -> dist/inkdot-<version>-rgdsplus-stock.zip: un
 
 ## Licence
 
-MIT OR Apache-2.0, at your option. See [CONTRIBUTING.md](CONTRIBUTING.md) for how changes are made
+MIT OR Apache-2.0, at your option. The program has the Roboto Condensed fonts built in (through
+nibkit's menu), which are under the SIL Open Font License 1.1: [LICENSE-OFL](LICENSE-OFL), installed
+with every package. See [CONTRIBUTING.md](CONTRIBUTING.md) for how changes are made
 (the DCO, and the rules for AI-assisted contributions).

@@ -41,6 +41,6 @@ ours. Its source is never opened. Record here which one, the version, and how it
 | nibOS docs (display, audio, input, device interface; `sdk/` app template) | Panel timings, pipes, input names, audio routing, brightness interface (our own project) |
 | DSlot `src/emulator.rs`, `src/launch.rs` (our own launcher, not an emulator) | The description format and launch.conf levels |
 | crates.io API, AUR RPC, Arch package search, GitHub search (2026-10-19) | Name collision checks |
-| Roboto Condensed (Google Fonts; the copy in DSlot's `assets/`) | The bottom screen's text. Apache-2.0 |
+| Roboto Condensed (Google Fonts; built in through nibkit's `menu-raster`) | The menu's text. SIL OFL 1.1 (LICENSE-OFL) |
 | PKWARE APPNOTE.TXT (the zip format's specification) | Reading `.zip` games (`crates/inkdot/src/rom.rs`) |
 | nibkit (`nibos/sdk/nibkit`, our own, MIT) | Screens, vblank, input names, touch, brightness, volume, paths, settings, DSlot's description format |

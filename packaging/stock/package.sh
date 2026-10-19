@@ -22,6 +22,8 @@ app="$stage/Roms/APPS/inkdot"
 mkdir -p "$app"
 cp target/aarch64-unknown-linux-gnu/release/inkdot "$app/inkdot"
 cp README.md docs/using.md LICENSE-MIT LICENSE-APACHE "$app/"
+# The Roboto Condensed fonts built in (through nibkit) are under the SIL OFL 1.1.
+cp LICENSE-OFL "$app/OFL.txt"
 find "$stage" -name .DS_Store -delete
 (cd "$stage" && zip -qr "../$(basename "$zip")" Roms)
 echo "$zip"
