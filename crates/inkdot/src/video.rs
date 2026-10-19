@@ -92,6 +92,7 @@ pub struct Video {
     newest: usize,
     ui: glow::Texture,
     ui_ready: bool,
+    last_swap: std::time::Duration,
 }
 
 fn compile(gl: &glow::Context, es: bool, vs: &str, fs: &str) -> Result<glow::Program, String> {
@@ -267,6 +268,7 @@ impl Video {
             newest: 0,
             ui,
             ui_ready: false,
+            last_swap: std::time::Duration::ZERO,
         })
     }
 
@@ -397,8 +399,15 @@ impl Video {
             // The bottom screen goes in the same window, below.
             self.draw_ui_at((0, 0, self.top.viewport.2, self.top.viewport.3));
         }
+        let t = std::time::Instant::now();
         self.top.window.gl_swap_window();
+        self.last_swap = t.elapsed();
         shot
+    }
+
+    /// How long the last swap of the top screen took (for INKDOT_DEBUG=stats).
+    pub fn last_swap(&self) -> std::time::Duration {
+        self.last_swap
     }
 
     /// The pixels of a viewport, top row first.

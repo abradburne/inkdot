@@ -62,6 +62,8 @@ struct Debug {
     stats: bool,
     shot: Option<PathBuf>,
     latency: bool,
+    /// The utilization clamp to ask for, in percent, instead of the default.
+    clamp: Option<u32>,
 }
 
 impl Debug {
@@ -70,6 +72,7 @@ impl Debug {
         for part in std::env::var("INKDOT_DEBUG").unwrap_or_default().split(',') {
             match part.split_once('=') {
                 Some(("shot", dir)) => d.shot = Some(PathBuf::from(dir)),
+                Some(("clamp", n)) => d.clamp = n.parse().ok(),
                 _ if part == "stats" => d.stats = true,
                 _ if part == "latency" => d.latency = true,
                 _ => {}
@@ -86,11 +89,18 @@ struct Stats {
     missed: u64,
     last_vblank: Option<Duration>,
     since: Option<Instant>,
-    /// The worst times seen for running the game, drawing and showing the top screen, and
-    /// the bottom screen.
-    emulate: Duration,
-    present: Duration,
-    bottom: Duration,
+    /// The times for running the game, drawing the top screen, its swap, and the bottom screen.
+    emulate: Vec<Duration>,
+    draw: Vec<Duration>,
+    swap: Vec<Duration>,
+    bottom: Vec<Duration>,
+}
+
+/// "median/worst" in milliseconds.
+fn spread(v: &mut [Duration]) -> String {
+    v.sort();
+    let ms = |d: Option<&Duration>| d.map_or(0.0, |d| d.as_secs_f64() * 1000.0);
+    format!("{:.2}/{:.2}", ms(v.get(v.len() / 2)), ms(v.last()))
 }
 
 /// What the bottom screen's backlight is doing.
@@ -162,7 +172,7 @@ fn main() {
 fn run(args: args::Args) -> Result<(), String> {
     watch_sigterm();
     // Half a core's capacity keeps a frame to a few milliseconds (perf.rs).
-    if !perf::clamp_min(50) {
+    if !perf::clamp_min(Debug::from_env().clamp.unwrap_or(50)) {
         eprintln!(
             "inkdot: no utilization clamp (kernel without uclamp): schedutil decides the clock"
         );
@@ -738,10 +748,14 @@ impl App {
             self.video.upload_ui(&px);
             self.video.present_bottom();
         }
-        let s = &mut self.stats;
-        s.emulate = s.emulate.max(t1 - t0);
-        s.present = s.present.max(t2 - t1);
-        s.bottom = s.bottom.max(t2.elapsed());
+        if self.debug.stats {
+            let swap = self.video.last_swap();
+            let s = &mut self.stats;
+            s.emulate.push(t1 - t0);
+            s.draw.push((t2 - t1).saturating_sub(swap));
+            s.swap.push(swap);
+            s.bottom.push(t2.elapsed());
+        }
     }
 
     /// INKDOT_DEBUG=stats: frames, missed vblanks, the panel's period, the frame budget, the
@@ -762,14 +776,14 @@ impl App {
         let since = *s.since.get_or_insert_with(Instant::now);
         if since.elapsed() >= Duration::from_secs(5) {
             let queued = self.audio.as_ref().map_or(0, |q| q.size() / 4);
-            let ms = |d: Duration| d.as_secs_f64() * 1000.0;
             eprintln!(
-                "inkdot: {} frames, {} vblanks missed, worst emulate {:.2} present {:.2} bottom {:.2} ms, period {:.4} ms, budget {:.2} ms, sound queue {} frames at {:.1} Hz",
+                "inkdot: {} frames, {} vblanks missed; median/worst ms: emulate {} draw {} swap {} bottom {}; period {:.4} ms, budget {:.2} ms, sound queue {} frames at {:.1} Hz",
                 s.frames,
                 s.missed,
-                ms(s.emulate),
-                ms(s.present),
-                ms(s.bottom),
+                spread(&mut s.emulate),
+                spread(&mut s.draw),
+                spread(&mut s.swap),
+                spread(&mut s.bottom),
                 self.pacer.period().as_secs_f64() * 1000.0,
                 self.pacer.budget().as_secs_f64() * 1000.0,
                 queued,
