@@ -41,7 +41,13 @@ fn main() {
             !a.starts_with("--")
                 && (*i == 0
                     || ![
-                        "--break", "--wav", "--play", "--frames", "--every", "--shots",
+                        "--break",
+                        "--wav",
+                        "--play",
+                        "--frames",
+                        "--every",
+                        "--shots",
+                        "--check-shot",
                     ]
                     .contains(&args[i - 1].as_str()))
         })

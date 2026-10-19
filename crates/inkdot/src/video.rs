@@ -34,19 +34,25 @@ void main() {
 "#;
 
 const GAME: &str = r#"
-in vec2 uv;
 out vec4 colour;
 uniform sampler2D now;
 uniform sampler2D before;
 uniform float persistence;  // the share of the last frame left in this one
 uniform float grid;         // 0: no grid; 1: the grid at full strength
 uniform vec3 gap;           // the colour between pixels
+uniform vec2 origin;        // the picture's bottom-left corner, in window pixels
+uniform float scale;        // window pixels per panel pixel (1 on the handheld)
 void main() {
-    vec3 c = mix(texture(now, uv).rgb, texture(before, uv).rgb, persistence);
-    // Where in its 5x5 square this panel pixel is: the last row and column are the gap.
-    vec2 f = fract(uv * vec2(160.0, 144.0));
-    float edge = step(0.8, max(f.x, f.y));
-    c = mix(c, mix(c, gap, 0.35), edge * grid);
+    // Which panel pixel of the picture this is, counted from its own corner (GL's rows go up),
+    // then which Game Boy pixel (5x5 panel pixels each) and where in its square. Integers
+    // throughout: with interpolated texture coordinates at mediump (16-bit on the DS+'s GPU)
+    // the right of the picture rounded to the wrong column, and the grid showed as stray lines.
+    ivec2 p = ivec2(floor((gl_FragCoord.xy - origin) / scale));
+    ivec2 gb = ivec2(p.x / 5, 143 - p.y / 5);
+    vec3 c = mix(texelFetch(now, gb, 0).rgb, texelFetch(before, gb, 0).rgb, persistence);
+    // The last column and the bottom row of each square are the gap.
+    bool edge = p.x % 5 == 4 || p.y % 5 == 0;
+    c = mix(c, mix(c, gap, 0.35), edge ? grid : 0.0);
     colour = vec4(c, 1.0);
 }
 "#;
@@ -101,7 +107,7 @@ pub struct Video {
 
 fn compile(gl: &glow::Context, es: bool, vs: &str, fs: &str) -> Result<glow::Program, String> {
     let header = if es {
-        "#version 300 es\nprecision mediump float;\n"
+        "#version 300 es\nprecision highp float;\nprecision highp int;\n"
     } else {
         "#version 330 core\n"
     };
@@ -430,6 +436,15 @@ impl Video {
             gl.uniform_1_f32(u("grid").as_ref(), if look.grid { 1.0 } else { 0.0 });
             let g = rgb(look.gap);
             gl.uniform_3_f32(u("gap").as_ref(), g[0], g[1], g[2]);
+            let v = self.top.viewport;
+            let scale = v.2 as f32 / screens::WIDTH as f32;
+            let bottom = screens::HEIGHT as i32 - GAME_Y - GAME_H;
+            gl.uniform_2_f32(
+                u("origin").as_ref(),
+                v.0 as f32 + GAME_X as f32 * scale,
+                v.1 as f32 + bottom as f32 * scale,
+            );
+            gl.uniform_1_f32(u("scale").as_ref(), scale);
         }
         self.draw_quad(self.game, Self::clip((GAME_X, GAME_Y, GAME_W, GAME_H)));
         let shot = capture.then(|| self.read_back(self.top.viewport));
