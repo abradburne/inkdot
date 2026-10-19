@@ -49,3 +49,15 @@ main loop:  wait for the top panel's vblank (nibkit::vblank)
 The options are declared once, in `packaging/nibos/inkdot.toml`: DSlot reads it to show them,
 and inkdot builds it in and parses it with the same code (nibkit's `dslot` module) to read its
 command line.
+
+## Known gaps
+
+- **Mid-line register writes** (Mealybug Tearoom, a stretch suite): a write to a PPU register in
+  mode 3 takes effect 3-7 pixels later than on hardware, and the DMG's one-pixel blend of old and
+  new palette at a BGP write isn't modelled. The likely cause is where in the M-cycle a CPU write
+  lands: inkdot applies it after the cycle's four dots; moving it earlier shifts constants the
+  Mooneye tests pinned, so it needs those re-derived together.
+- **The DMG's OAM corruption bug** (Blargg `oam_bug`): not modelled; 3 of 8 pass.
+- **The DMG boot ROM's logo** is not left in VRAM (no boot ROM runs), which a few games that
+  animate it would show.
+- **MBC6, MBC7, MMM01, HuC1, HuC3, TAMA5**, the camera, the printer, link play: not yet.
