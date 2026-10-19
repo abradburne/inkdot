@@ -1038,7 +1038,8 @@ impl App {
     /// INKDOT_DEBUG=cycle-looks: every four seconds, the next step.
     fn cycle_looks(&mut self) {
         let n = self.frame_count;
-        if n == 60 {
+        // Frame 120's capture is of play (the bottom screen blank); the menu opens after it.
+        if n == 150 {
             self.ui.open_menu();
             self.ui.go(ui::Page::Game);
         }
@@ -1059,6 +1060,11 @@ impl App {
             5 => Action::Restart,
             6 => set("color"),
             7 => Action::Restart,
+            8 | 9 => {
+                // Then the Play and States pages, for their captures.
+                self.ui.go(if (n - 180) / 240 == 8 { ui::Page::Play } else { ui::Page::States });
+                return;
+            }
             _ => return,
         };
         eprintln!("inkdot: cycle-looks frame {n}: {step:?}");
