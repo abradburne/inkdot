@@ -65,12 +65,15 @@ const IDLE: Duration = Duration::from_secs(10);
 /// INKDOT_DEBUG: `stats` logs pacing and sound every five seconds; `shot=DIR` saves both
 /// screens as PNG files there ten seconds in; `latency` logs, for each change of the buttons,
 /// when the frame that read it started and the vblank at which it was shown (CLOCK_MONOTONIC
-/// ns, comparable with nibOS's latency tools). For checking a build on the handheld.
+/// ns, comparable with nibOS's latency tools); `frames=FILE` writes a line per frame on leaving:
+/// the vblank it followed, when it started, finished the game, finished drawing and swapping,
+/// and the CPU's clock then (CLOCK_MONOTONIC µs, kHz). For checking a build on the handheld.
 #[derive(Clone, Debug, Default)]
 struct Debug {
     stats: bool,
     shot: Option<PathBuf>,
     latency: bool,
+    frames: Option<PathBuf>,
     /// The utilization clamp to ask for in play (of 1024), instead of perf::PLAY.
     clamp: Option<u32>,
 }
@@ -82,6 +85,7 @@ impl Debug {
             match part.split_once('=') {
                 Some(("shot", dir)) => d.shot = Some(PathBuf::from(dir)),
                 Some(("clamp", n)) => d.clamp = n.parse().ok(),
+                Some(("frames", file)) => d.frames = Some(PathBuf::from(file)),
                 _ if part == "stats" => d.stats = true,
                 _ if part == "latency" => d.latency = true,
                 _ => {}
@@ -159,6 +163,9 @@ struct App {
     /// vblank that shows it (when its frame started).
     last_buttons: u8,
     latency_pending: Option<(u8, Duration)>,
+    /// INKDOT_DEBUG=frames: the last vblank waited for, and a record per frame.
+    vblank_at: Duration,
+    frame_log: Vec<[u64; 6]>,
 }
 
 fn main() {
@@ -296,6 +303,8 @@ fn run(args: args::Args) -> Result<(), String> {
         frame_count: 0,
         last_buttons: 0,
         latency_pending: None,
+        vblank_at: Duration::ZERO,
+        frame_log: Vec::new(),
     };
     app.apply_look();
     // Resume where the game was left, unless told not to.
@@ -330,6 +339,7 @@ fn run(args: args::Args) -> Result<(), String> {
                     );
                 }
                 app.vblank_stats(at);
+                app.vblank_at = at;
                 app.pacer.vblank(at);
                 if let Some(start) = app.pacer.next_start() {
                     sleep_until(start);
@@ -651,6 +661,17 @@ impl App {
 
     /// Leaving: the resume state, battery RAM, the screens lit again.
     fn leave(&mut self) {
+        if let Some(file) = &self.debug.frames {
+            let text: String =
+                std::iter::once("vblank start emulated drawn swapped khz\n".to_owned())
+                    .chain(
+                        self.frame_log.iter().map(|r| {
+                            r.iter().map(u64::to_string).collect::<Vec<_>>().join(" ") + "\n"
+                        }),
+                    )
+                    .collect();
+            let _ = std::fs::write(file, text);
+        }
         let model = if self.gb.hw.cgb {
             Console::Cgb
         } else {
@@ -720,6 +741,12 @@ impl App {
     }
 
     fn frame(&mut self) {
+        let logging = self.debug.frames.is_some();
+        let m0 = if logging {
+            monotonic_now()
+        } else {
+            Duration::ZERO
+        };
         let paused = self.ui.menu;
         let fast = self.fast || self.controls.fast_held();
         let t0 = Instant::now();
@@ -759,6 +786,11 @@ impl App {
             }
         }
         let t1 = Instant::now();
+        let m1 = if logging {
+            monotonic_now()
+        } else {
+            Duration::ZERO
+        };
         self.convert_frame();
         self.video.upload_frame(&self.rgba);
         let look = self.lcd_look();
@@ -768,6 +800,23 @@ impl App {
             self.save_shots(&px);
         }
         let t2 = Instant::now();
+        if logging {
+            let us = |d: Duration| d.as_micros() as u64;
+            let swap_start = monotonic_now().saturating_sub(self.video.last_swap());
+            let khz =
+                std::fs::read_to_string("/sys/devices/system/cpu/cpufreq/policy0/scaling_cur_freq")
+                    .ok()
+                    .and_then(|s| s.trim().parse().ok())
+                    .unwrap_or(0);
+            self.frame_log.push([
+                us(self.vblank_at),
+                us(m0),
+                us(m1),
+                us(swap_start),
+                us(monotonic_now()),
+                khz,
+            ]);
+        }
 
         // Battery RAM a second after the game last started writing it.
         if self

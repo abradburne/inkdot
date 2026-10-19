@@ -26,9 +26,10 @@ resumes there.
 
 ## The bottom screen
 
-While the game plays, the bottom screen has six tiles: **Save** (into the quick slot), **Load**
-(pick one of six slots, each with its picture, date and play time), **Look**, **Fast**,
-**Options** and **Quit**. Untouched for ten seconds it dims, or turns off (see Options); a touch
+While the game plays, the bottom screen has six tiles: **Save** and **Load** (each opens the six
+slots, with each state's picture, date and play time, and empty ones marked; saving over a state
+asks for a second tap), **Look**, **Fast**, **Options** and **Quit**. Menu + R saves straight into
+the quick slot, the last one saved or loaded, and Menu + L loads it. Untouched for ten seconds it dims, or turns off (see Options); a touch
 wakes it without doing anything else.
 
 ## Options

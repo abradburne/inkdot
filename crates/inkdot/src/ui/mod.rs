@@ -150,6 +150,8 @@ pub struct Ui {
     /// Opened with Back: the game is paused and the D-pad moves the focus.
     pub menu: bool,
     states_saving: bool,
+    /// Saving into a slot that holds a state: tapped once, waiting for a second tap to replace it.
+    confirm: Option<usize>,
     focus: usize,
     canvas: Canvas,
     dirty: bool,
@@ -169,6 +171,7 @@ impl Ui {
             page: Page::Play,
             menu: false,
             states_saving: false,
+            confirm: None,
             focus: 0,
             canvas: Canvas::new(W, H),
             dirty: true,
@@ -182,6 +185,7 @@ impl Ui {
 
     pub fn go(&mut self, page: Page) {
         self.page = page;
+        self.confirm = None;
         self.focus = 0;
         self.dirty = true;
     }
@@ -209,26 +213,8 @@ impl Ui {
         match self.page {
             Page::Play => {
                 let (x0, y0, tw, th, gap) = (32, HEADER + 24, 304, 290, 24);
-                let slot = m.quick_slot.max(1);
-                let saved = m
-                    .slots
-                    .get(slot)
-                    .map(|s| s.made.clone())
-                    .unwrap_or_default();
                 let tiles: [(&'static str, String, Icon, Option<Action>); 6] = [
-                    (
-                        "Save",
-                        format!(
-                            "Slot {slot}{}",
-                            if saved.is_empty() {
-                                String::new()
-                            } else {
-                                format!(" · {saved}")
-                            }
-                        ),
-                        Icon::Save,
-                        Some(Action::Save(0)),
-                    ),
+                    ("Save", "Pick a slot".into(), Icon::Save, None),
                     ("Load", "Pick a slot".into(), Icon::Load, None),
                     (
                         "Look",
@@ -457,6 +443,21 @@ impl Ui {
                 self.go(Page::States);
                 None
             }
+            Kind::Tile { label: "Save", .. } => {
+                self.states_saving = true;
+                self.go(Page::States);
+                None
+            }
+            // Saving over a state takes a second tap on the same slot.
+            Kind::Slot(n) if self.states_saving => {
+                let used = m.slots.get(*n).is_some_and(|s| s.picture.is_some());
+                if used && self.confirm != Some(*n) {
+                    self.confirm = Some(*n);
+                    return None;
+                }
+                self.confirm = None;
+                w.action.clone()
+            }
             Kind::Tile { label: "Look", .. } => {
                 self.go(Page::Look);
                 None
@@ -471,6 +472,7 @@ impl Ui {
             Kind::Tab { label, .. } => {
                 if label == "Load" || label == "Save" {
                     self.states_saving = label == "Save";
+                    self.confirm = None;
                     self.dirty = true;
                     None
                 } else {
@@ -613,7 +615,8 @@ impl Ui {
         // The header: the page's title or the game's, the time and the battery.
         let title = match self.page {
             Page::Play => m.title.clone(),
-            Page::States => "Save states".into(),
+            Page::States if self.states_saving => "Save to a slot".into(),
+            Page::States => "Load a slot".into(),
             Page::Look => "Look".into(),
             Page::Options => "Options".into(),
         };
@@ -644,6 +647,17 @@ impl Ui {
         for (i, w) in widgets.iter().enumerate() {
             let focused = self.menu && i == self.focus;
             draw_widget(c, m, w, focused);
+            if matches!(w.kind, Kind::Slot(n) if self.confirm == Some(n)) {
+                let r = Rect::new(w.rect.x, w.rect.y + w.rect.h - 64 - 72, w.rect.w, 72);
+                c.round(r, 12, colour::INK);
+                c.text(
+                    r,
+                    "Tap again to replace",
+                    BODY,
+                    colour::INK_DARK,
+                    Align::Centre,
+                );
+            }
         }
         if let Some(t) = &m.toast {
             let r = Rect::new(W / 2 - 260, H - 104, 520, 76);
@@ -935,12 +949,33 @@ mod tests {
         }
     }
 
+    /// Save opens the six slots to choose from; an empty one saves at once, a used one only on
+    /// a second tap.
+    #[test]
+    fn save_picks_a_slot_and_asks_before_replacing() {
+        let mut ui = Ui::new();
+        let mut m = model();
+        m.slots[2].picture = Some(vec![0; 160 * 144 * 4]);
+        // The first tile, top left, is Save.
+        assert_eq!(ui.tap(&m, 100, 200), None);
+        assert_eq!((ui.page, ui.states_saving), (Page::States, true));
+        // Slot 1 (top left) is empty: saved at once.
+        assert_eq!(ui.tap(&m, 150, 200), Some(Action::Save(1)));
+        // Slot 2 holds a state: the first tap asks, the second saves.
+        assert_eq!(ui.tap(&m, 500, 200), None);
+        assert_eq!(ui.confirm, Some(2));
+        assert!(ui.render(&m).is_some());
+        assert_eq!(ui.tap(&m, 500, 200), Some(Action::Save(2)));
+        // A tap elsewhere in between starts the asking again.
+        ui.tap(&m, 500, 200);
+        ui.tap(&m, 150, 200);
+        assert_eq!(ui.tap(&m, 500, 200), None);
+    }
+
     #[test]
     fn the_play_tiles_do_what_they_say() {
         let mut ui = Ui::new();
         let m = model();
-        // The first tile, top left, is Save.
-        assert_eq!(ui.tap(&m, 100, 200), Some(Action::Save(0)));
         // Quit is bottom right.
         assert_eq!(ui.tap(&m, 900, 600), Some(Action::Quit));
         // Options opens its page.
