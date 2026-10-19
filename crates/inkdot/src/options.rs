@@ -206,7 +206,6 @@ impl Spec {
 /// Where a value came from, as the Options page says it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Source {
-    Menu,
     Launch,
     Game,
     Console,
@@ -216,7 +215,7 @@ pub enum Source {
 impl Source {
     pub fn label(self, console: &str) -> String {
         match self {
-            Source::Menu | Source::Game => "this game".into(),
+            Source::Game => "this game".into(),
             Source::Launch => "set at launch".into(),
             Source::Console => format!("all {console}"),
             Source::Default => "default".into(),
@@ -242,7 +241,8 @@ pub struct Options {
     console: String,
     rom_name: String,
     given: BTreeMap<String, Value>,
-    changed: BTreeMap<String, Value>,
+    /// Options changed in the menu this run: what the command line gave no longer stands.
+    touched: std::collections::BTreeSet<String>,
     pub settings: Settings,
 }
 
@@ -257,7 +257,7 @@ impl Options {
             console: console.to_owned(),
             rom_name: rom_name.to_owned(),
             given,
-            changed: BTreeMap::new(),
+            touched: std::collections::BTreeSet::new(),
             settings,
         }
     }
@@ -286,9 +286,6 @@ impl Options {
         };
         let def = spec.def();
         let ok = |v: &&Value| def.accepts(v);
-        if let Some(v) = self.changed.get(key) {
-            return (v.clone(), Source::Menu);
-        }
         let full = Self::full(key);
         let game = Scope::Game(Scope::game_key(&self.console, &self.rom_name));
         let console = Scope::Console(self.console.clone());
@@ -300,31 +297,14 @@ impl Options {
             (spec.default_value(), Source::Default)
         };
         // DSlot passes the file's values as flags too: those are still the file's.
-        match self.given.get(key).filter(ok) {
+        match self
+            .given
+            .get(key)
+            .filter(ok)
+            .filter(|_| !self.touched.contains(key))
+        {
             Some(v) if *v != kept.0 => (v.clone(), Source::Launch),
             _ => kept,
-        }
-    }
-
-    /// Clears every option set for the game, or for its console: each falls back to the next
-    /// level, then to its default (DSlot's menu shows that as "inkdot's own").
-    pub fn reset(&mut self, for_game: bool) {
-        let scope = if for_game {
-            Scope::Game(Scope::game_key(&self.console, &self.rom_name))
-        } else {
-            Scope::Console(self.console.clone())
-        };
-        for spec in SPECS {
-            self.settings.reset(&scope, &Self::full(spec.key));
-        }
-        // What the command line or the menu gave this run no longer stands either.
-        self.changed.clear();
-        self.given.clear();
-        if let Err(e) = self.settings.save() {
-            eprintln!(
-                "inkdot: cannot save settings to {}: {e}",
-                self.settings.file().display()
-            );
         }
     }
 
@@ -346,13 +326,50 @@ impl Options {
         if !spec.def().accepts(&value) {
             return;
         }
-        let scope = if for_game {
+        self.settings
+            .set(self.scope(for_game), &Self::full(key), value);
+        self.touched.insert(key.to_owned());
+        self.save();
+    }
+
+    /// Clears an option at the game's level or its console's, so the next level's value (or the
+    /// default) applies again.
+    pub fn unset(&mut self, key: &str, for_game: bool) {
+        self.settings.reset(&self.scope(for_game), &Self::full(key));
+        self.touched.insert(key.to_owned());
+        self.save();
+    }
+
+    /// The value set at the game's level or its console's, if any.
+    pub fn here(&self, key: &str, for_game: bool) -> Option<Value> {
+        let def = Self::spec(key)?.def();
+        self.settings
+            .get(&self.scope(for_game), &Self::full(key))
+            .filter(|v| def.accepts(v))
+            .cloned()
+    }
+
+    /// What an option is when not set at that level, and where that comes from: the console's
+    /// setting (for the game's level), else the default.
+    pub fn inherited(&self, key: &str, for_game: bool) -> (Value, String) {
+        if for_game {
+            if let Some(v) = self.here(key, false) {
+                return (v, self.console.clone());
+            }
+        }
+        let default = Self::spec(key).map_or(Value::Boolean(false), Spec::default_value);
+        (default, "default".into())
+    }
+
+    fn scope(&self, for_game: bool) -> Scope {
+        if for_game {
             Scope::Game(Scope::game_key(&self.console, &self.rom_name))
         } else {
             Scope::Console(self.console.clone())
-        };
-        self.settings.set(scope, &Self::full(key), value.clone());
-        self.changed.insert(key.to_owned(), value);
+        }
+    }
+
+    fn save(&self) {
         if let Err(e) = self.settings.save() {
             eprintln!(
                 "inkdot: cannot save settings to {}: {e}",
@@ -377,6 +394,11 @@ impl Options {
                 .collect(),
             None => Vec::new(),
         }
+    }
+
+    /// Whether stepping through the values goes round (choices) or stops at the ends (numbers).
+    pub fn wraps(&self, key: &str) -> bool {
+        !matches!(Self::spec(key).map(|s| s.takes), Some(Takes::Number { .. }))
     }
 
     /// How a value is shown.
@@ -410,7 +432,7 @@ mod tests {
         assert_eq!(o.get("look"), (Value::from("color"), Source::Default));
         assert_eq!(o.get("lcd"), (Value::Boolean(false), Source::Launch));
         o.set("lcd", Value::Boolean(true), true);
-        assert_eq!(o.get("lcd"), (Value::Boolean(true), Source::Menu));
+        assert_eq!(o.get("lcd"), (Value::Boolean(true), Source::Game));
         // A value the option doesn't take is ignored.
         o.set("look", "sepia".into(), true);
         assert_eq!(o.str("look"), "color");
@@ -465,18 +487,36 @@ mod tests {
         assert_eq!(other.get("fast"), (Value::Integer(2), Source::Launch));
     }
 
+    /// Each level shows what is set there, or what it would take from the level above; unset,
+    /// it takes that again.
     #[test]
-    fn reset_falls_back_a_level() {
-        let mut o = options("reset", &[("lcd", Value::Boolean(false))]);
+    fn levels_set_inherit_and_unset() {
+        let mut o = options("levels-unset", &[("lcd", Value::Boolean(false))]);
+        assert_eq!(o.here("fast", true), None);
+        assert_eq!(
+            o.inherited("fast", true),
+            (Value::Integer(4), "default".into())
+        );
         o.set("fast", Value::Integer(6), false);
+        assert_eq!(o.inherited("fast", true), (Value::Integer(6), "GB".into()));
+        assert_eq!(
+            o.inherited("fast", false),
+            (Value::Integer(4), "default".into())
+        );
         o.set("fast", Value::Integer(8), true);
-        o.reset(true);
+        assert_eq!(o.here("fast", true), Some(Value::Integer(8)));
+        assert_eq!(o.get("fast"), (Value::Integer(8), Source::Game));
+        o.unset("fast", true);
         assert_eq!(o.get("fast"), (Value::Integer(6), Source::Console));
+        // A flag from the command line stands until the menu changes that option.
+        assert_eq!(o.get("lcd").1, Source::Launch);
+        o.unset("lcd", true);
         assert_eq!(o.get("lcd"), (Value::Boolean(true), Source::Default));
-        o.reset(false);
+        o.unset("fast", false);
         assert_eq!(o.get("fast").1, Source::Default);
         let again = Settings::load(o.settings.file());
         assert_eq!(again.get(&Scope::Console("GB".into()), "inkdot.fast"), None);
+        assert!(!o.wraps("fast") && o.wraps("look"));
     }
 
     #[test]

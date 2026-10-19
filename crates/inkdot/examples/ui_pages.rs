@@ -31,6 +31,16 @@ fn main() {
     };
     let looks = [
         (
+            "",
+            "Use GB",
+            [
+                [0x6f, 0xd8, 0xb8],
+                [0x3c, 0xa3, 0x89],
+                [0x1f, 0x67, 0x58],
+                [0x0b, 0x2e, 0x2a],
+            ],
+        ),
+        (
             "color",
             "Game Boy Color",
             [
@@ -83,13 +93,16 @@ fn main() {
         swatch: s,
     })
     .collect();
-    let row = |key: &str, label: &str, shown: &str, source: &str| OptionRow {
+    // A row set at this level (`here`), or showing where its value comes from.
+    let row = |key: &str, label: &str, shown: &str, here: bool| OptionRow {
         key: key.into(),
         label: label.into(),
         shown: shown.into(),
-        source: source.into(),
-        values: vec![(shown.into(), shown.into())],
-        current: shown.into(),
+        inherited: !here,
+        values: vec![(None, shown.into())],
+        at: 0,
+        wraps: true,
+        use_hint: "use GB".into(),
     };
     let m = Model {
         title: "Super Mario Land 2 - 6 Golden Coins (USA, Europe)".into(),
@@ -99,12 +112,23 @@ fn main() {
         quick_slot: 1,
         looks,
         look: "gameboy".into(),
+        look_use: "use GB".into(),
         options: vec![
-            row("lcd", "LCD texture", "On", "default"),
-            row("speed", "Timing", "Smooth (panel rate)", "default"),
-            row("bottom", "Bottom screen in play", "Dim when idle", "all GB"),
-            row("resume", "Resume where I left off", "On", "default"),
-            row("fast", "Fast-forward speed", "4x", "this game"),
+            row("lcd", "LCD texture", "Use default (On)", false),
+            row("speed", "Timing", "Use default (Smooth)", false),
+            row(
+                "bottom",
+                "Bottom screen in play",
+                "Use GB (Dim when idle)",
+                false,
+            ),
+            row(
+                "resume",
+                "Resume where I left off",
+                "Use default (On)",
+                false,
+            ),
+            row("fast", "Fast-forward speed", "6x", true),
         ],
         fast: false,
         top_brightness: Some(60),

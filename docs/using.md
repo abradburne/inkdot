@@ -36,10 +36,13 @@ wakes it without doing anything else.
 
 ## Options
 
-Each option can be set for one game or for all of its console's games (the two buttons at the top
-of the Look and Options pages); DSlot's menu has the same options per console and per game. An
-option given on the command line wins for that run. **Reset** clears what is set at that level,
-so the console's setting, or else the default, applies again.
+Each option can be set for one game or for all of its console's games: the two buttons at the
+top of the Look and Options pages choose which. A row's first choice is **Use …**, where its
+value comes from when it isn't set there: "Use GB (Light)" when all GB games have it, "Use
+default (On)" when nothing sets it. While a row uses that, it shows it muted; set there, it shows
+the value. Stepping back round to "Use …", or Y on a row set there, clears it at that level. The
+Look page's first tile does the same for the look. DSlot's menu shows the same levels. An option
+given on the command line wins for that run, until it's changed in the menu.
 
 The choices are kept in `settings.toml`. In the nibOS package (built with DSlot's part) that is
 DSlot's own file, however inkdot is started, so DSlot's menu and inkdot's agree; otherwise it is

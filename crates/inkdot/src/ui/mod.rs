@@ -32,8 +32,9 @@ pub enum Action {
         value: nibkit::settings::Value,
         for_game: bool,
     },
-    /// Clear the options set for this game, or for its console.
-    Reset {
+    /// Clear an option at this game's level or its console's, so the level above applies.
+    Unset {
+        key: String,
         for_game: bool,
     },
     ToggleFast,
@@ -61,11 +62,20 @@ pub struct SlotInfo {
 pub struct OptionRow {
     pub key: String,
     pub label: String,
+    /// What the row shows: the value set at this level, or where it comes from instead
+    /// ("Use GB (Light)", "Use default (On)").
     pub shown: String,
-    pub source: String,
-    /// The values in order, for the row's left and right arrows.
-    pub values: Vec<(nibkit::settings::Value, String)>,
-    pub current: nibkit::settings::Value,
+    /// Not set at this level: shown muted.
+    pub inherited: bool,
+    /// The choices in order, for the row's arrows: first "Use …" (`None`: not set here), then
+    /// the values.
+    pub values: Vec<(Option<nibkit::settings::Value>, String)>,
+    /// Which of them is the row's now.
+    pub at: usize,
+    /// Choices go round; a number stops at its ends.
+    pub wraps: bool,
+    /// What Y does on a row set here: "use GB", "use default".
+    pub use_hint: String,
 }
 
 /// A look as the Look page shows it.
@@ -85,7 +95,10 @@ pub struct Model {
     pub slots: Vec<SlotInfo>,
     pub quick_slot: usize,
     pub looks: Vec<LookTile>,
+    /// The look set at this level; empty when it comes from the level above (the "Use …" tile).
     pub look: String,
+    /// What Y does when the look is set here: "use GB".
+    pub look_use: String,
     pub options: Vec<OptionRow>,
     pub fast: bool,
     pub top_brightness: Option<u8>,
@@ -305,25 +318,23 @@ impl Ui {
                         action: None,
                     });
                 }
-                w.push(Widget {
-                    rect: Rect::new(W - 32 - 2 * 200 - 160, 12, 148, 64),
-                    kind: Kind::Tab {
-                        label: "Reset".into(),
-                        on: false,
-                    },
-                    action: Some(Action::Reset {
-                        for_game: m.for_game,
-                    }),
-                });
                 let n = m.looks.len().max(1) as i32;
                 let gap = 16;
                 let tw = (W - 64 - (n - 1) * gap) / n;
                 for i in 0..m.looks.len() {
                     let rect = Rect::new(32 + i as i32 * (tw + gap), HEADER + 24, tw, 260);
-                    let action = Some(Action::Set {
-                        key: "look".into(),
-                        value: m.looks[i].value.as_str().into(),
-                        for_game: m.for_game,
+                    // The first tile, "Use …", clears the look at this level.
+                    let action = Some(if m.looks[i].value.is_empty() {
+                        Action::Unset {
+                            key: "look".into(),
+                            for_game: m.for_game,
+                        }
+                    } else {
+                        Action::Set {
+                            key: "look".into(),
+                            value: m.looks[i].value.as_str().into(),
+                            for_game: m.for_game,
+                        }
                     });
                     w.push(Widget {
                         rect,
@@ -361,16 +372,6 @@ impl Ui {
                         action: None,
                     });
                 }
-                w.push(Widget {
-                    rect: Rect::new(W - 32 - 2 * 200 - 160, 12, 148, 64),
-                    kind: Kind::Tab {
-                        label: "Reset".into(),
-                        on: false,
-                    },
-                    action: Some(Action::Reset {
-                        for_game: m.for_game,
-                    }),
-                });
                 let rows: Vec<usize> = (0..m.options.len())
                     .filter(|&i| {
                         !matches!(
@@ -382,11 +383,11 @@ impl Ui {
                 let mut y = HEADER + 16;
                 for i in rows {
                     w.push(Widget {
-                        rect: Rect::new(32, y, W - 64, 76),
+                        rect: Rect::new(32, y, W - 64, 72),
                         kind: Kind::Row(i),
                         action: None,
                     });
-                    y += 84;
+                    y += 80;
                 }
                 for (label, value) in [
                     ("Top screen", m.top_brightness),
@@ -395,14 +396,14 @@ impl Ui {
                 ] {
                     if let Some(v) = value {
                         w.push(Widget {
-                            rect: Rect::new(32, y, W - 64, 76),
+                            rect: Rect::new(32, y, W - 64, 72),
                             kind: Kind::Slider {
                                 label: label.into(),
                                 value: v,
                             },
                             action: None,
                         });
-                        y += 84;
+                        y += 80;
                     }
                 }
             }
@@ -468,7 +469,6 @@ impl Ui {
                 self.go(Page::Options);
                 None
             }
-            Kind::Tab { label, .. } if label == "Reset" => w.action.clone(),
             Kind::Tab { label, .. } => {
                 if label == "Load" || label == "Save" {
                     self.states_saving = label == "Save";
@@ -490,17 +490,24 @@ impl Ui {
                     Some((x, _)) if x < w.rect.x + w.rect.w / 2 => -1,
                     _ => 1,
                 };
-                let at = row
-                    .values
-                    .iter()
-                    .position(|(v, _)| *v == row.current)
-                    .unwrap_or(0) as i32;
-                let next = (at + dir).rem_euclid(row.values.len().max(1) as i32) as usize;
-                let value = row.values.get(next)?.0.clone();
-                Some(Action::Set {
-                    key: row.key.clone(),
-                    value,
-                    for_game: m.for_game,
+                let n = row.values.len().max(1) as i32;
+                let next = if row.wraps {
+                    (row.at as i32 + dir).rem_euclid(n)
+                } else {
+                    (row.at as i32 + dir).clamp(0, n - 1)
+                } as usize;
+                if next == row.at {
+                    return None;
+                }
+                let key = row.key.clone();
+                let for_game = m.for_game;
+                Some(match row.values.get(next)?.0.clone() {
+                    Some(value) => Action::Set {
+                        key,
+                        value,
+                        for_game,
+                    },
+                    None => Action::Unset { key, for_game },
                 })
             }
             Kind::Slider { label, value } => {
@@ -588,6 +595,18 @@ impl Ui {
                 let w = widgets[self.focus].clone();
                 self.activate(m, &w, None)
             }
+            // Y: back to the level above, on a row (or the look) set at this level.
+            Nav::Y => match widgets[self.focus].kind {
+                Kind::Row(i) if !m.options[i].inherited => Some(Action::Unset {
+                    key: m.options[i].key.clone(),
+                    for_game: m.for_game,
+                }),
+                Kind::Look(_) if !m.look.is_empty() => Some(Action::Unset {
+                    key: "look".into(),
+                    for_game: m.for_game,
+                }),
+                _ => None,
+            },
             Nav::B => {
                 if self.page == Page::Play {
                     Some(Action::Resume)
@@ -673,6 +692,21 @@ impl Ui {
                 Align::Centre,
             );
         }
+        // On a row set at this level, what Y does.
+        let hint = match widgets.get(self.focus).map(|w| &w.kind) {
+            Some(Kind::Row(i)) if !m.options[*i].inherited => Some(&m.options[*i].use_hint),
+            Some(Kind::Look(_)) if !m.look.is_empty() => Some(&m.look_use),
+            _ => None,
+        };
+        if let (true, Some(hint)) = (self.menu, hint) {
+            c.text(
+                Rect::new(32, H - 40, W - 64, 32),
+                &format!("Y {hint}"),
+                SMALL,
+                colour::DIM,
+                Align::Centre,
+            );
+        }
         Some(&self.canvas.px)
     }
 }
@@ -686,6 +720,7 @@ pub enum Nav {
     Right,
     A,
     B,
+    Y,
 }
 
 fn draw_widget(c: &mut Canvas, m: &Model, w: &Widget, focused: bool) {
@@ -803,19 +838,18 @@ fn draw_widget(c: &mut Canvas, m: &Model, w: &Widget, focused: bool) {
                 colour::TEXT,
                 Align::Left,
             );
+            // Set here: the value, bright. Not set here: where it comes from, muted.
+            let (t, colour) = if row.inherited {
+                (BODY, colour::DIM)
+            } else {
+                (LABEL, colour::INK)
+            };
             c.text(
-                Rect::new(r.x + 450, r.y, 340, r.h),
+                Rect::new(r.x + 420, r.y, r.w - 440, r.h),
                 &format!("‹  {}  ›", row.shown),
-                LABEL,
-                colour::INK,
+                t,
+                colour,
                 Align::Centre,
-            );
-            c.text(
-                Rect::new(r.x + r.w - 190, r.y, 170, r.h),
-                &row.source,
-                SMALL,
-                colour::DIM,
-                Align::Right,
             );
         }
         Kind::Slider { label, value } => {
@@ -937,13 +971,16 @@ mod tests {
             options: vec![OptionRow {
                 key: "speed".into(),
                 label: "Timing".into(),
-                shown: "Smooth".into(),
-                source: "default".into(),
+                shown: "Use default (Smooth)".into(),
+                inherited: true,
                 values: vec![
-                    ("panel".into(), "Smooth".into()),
-                    ("exact".into(), "Exact".into()),
+                    (None, "Use default (Smooth)".into()),
+                    (Some("panel".into()), "Smooth".into()),
+                    (Some("exact".into()), "Exact".into()),
                 ],
-                current: "panel".into(),
+                at: 0,
+                wraps: true,
+                use_hint: "use default".into(),
             }],
             ..Model::default()
         }
@@ -983,29 +1020,44 @@ mod tests {
         assert_eq!(ui.page, Page::Options);
     }
 
+    /// A row starts at "Use …" and steps through the values both ways, round to "Use …" again,
+    /// which clears the option at this level; Y does that too, on a row set here.
     #[test]
     fn a_row_steps_its_value_both_ways() {
         let mut ui = Ui::new();
         ui.go(Page::Options);
-        let m = model();
-        let right = ui.tap(&m, 900, HEADER + 40);
-        assert_eq!(
-            right,
+        let mut m = model();
+        let set = |v: &str| {
             Some(Action::Set {
                 key: "speed".into(),
-                value: "exact".into(),
-                for_game: true
+                value: v.into(),
+                for_game: true,
             })
-        );
-        let left = ui.tap(&m, 100, HEADER + 40);
+        };
+        let unset = Some(Action::Unset {
+            key: "speed".into(),
+            for_game: true,
+        });
+        assert_eq!(ui.tap(&m, 900, HEADER + 40), set("panel"));
         assert_eq!(
-            left,
-            Some(Action::Set {
-                key: "speed".into(),
-                value: "exact".into(),
-                for_game: true
-            })
+            ui.tap(&m, 100, HEADER + 40),
+            set("exact"),
+            "round the other way"
         );
+        // The taps left the focus on the row. Inheriting, Y does nothing; set here, Y and
+        // stepping back to "Use …" clear it.
+        ui.open_menu();
+        ui.go(Page::Options);
+        ui.tap(&m, 900, HEADER + 40);
+        assert_eq!(ui.nav(&m, Nav::Y), None);
+        m.options[0].at = 1;
+        m.options[0].inherited = false;
+        assert_eq!(ui.tap(&m, 100, HEADER + 40), unset);
+        assert_eq!(ui.nav(&m, Nav::Y), unset);
+        // A number stops at its ends.
+        m.options[0].wraps = false;
+        m.options[0].at = 2;
+        assert_eq!(ui.tap(&m, 900, HEADER + 40), None);
     }
 
     #[test]

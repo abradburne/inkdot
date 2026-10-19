@@ -477,6 +477,7 @@ fn nav_of(pad: Pad) -> Option<Nav> {
         Pad::Right => Nav::Right,
         Pad::A => Nav::A,
         Pad::B => Nav::B,
+        Pad::Y => Nav::Y,
         _ => return None,
     })
 }
@@ -625,15 +626,13 @@ impl App {
                     self.apply_look();
                 }
             }
-            Action::Reset { for_game } => {
-                self.options.reset(for_game);
+            Action::Unset { key, for_game } => {
+                let look_before = self.options.str("look");
+                self.options.unset(&key, for_game);
+                if key == "look" && self.options.str("look") != look_before {
+                    self.toast("Restart the game for the new console");
+                }
                 self.apply_look();
-                let text = if for_game {
-                    "Game's options cleared".to_owned()
-                } else {
-                    format!("All {}: options cleared", self.console)
-                };
-                self.toast(&text);
             }
             Action::ToggleFast => self.fast = !self.fast,
             Action::Brightness { top, percent } => {
@@ -982,12 +981,15 @@ impl App {
                 .map(|i| slot_info(&self.files.state(i)))
                 .collect();
         }
-        m.look = if self.console == "GB" {
-            self.options.str("look")
-        } else {
-            String::new()
-        };
-        m.looks = if self.console == "GB" {
+        let for_game = m.for_game;
+        let (inherited_look, look_from) = self.options.inherited("look", for_game);
+        m.look = self
+            .options
+            .here("look", for_game)
+            .and_then(|v| v.as_str().map(str::to_owned))
+            .unwrap_or_default();
+        m.look_use = format!("use {look_from}");
+        let looks: Vec<LookTile> = if self.console == "GB" {
             self.options
                 .values("look")
                 .into_iter()
@@ -1020,20 +1022,45 @@ impl App {
         } else {
             Vec::new()
         };
-        let console = self.console;
+        // First, "Use …": the look from the level above, with its colours.
+        m.looks = match looks
+            .iter()
+            .find(|t| Some(t.value.as_str()) == inherited_look.as_str())
+        {
+            Some(t) if !looks.is_empty() => std::iter::once(LookTile {
+                value: String::new(),
+                label: format!("Use {look_from}"),
+                swatch: t.swatch,
+            })
+            .chain(looks)
+            .collect(),
+            _ => looks,
+        };
         m.options = self
             .options
             .keys()
             .into_iter()
             .map(|key| {
                 let key = key.to_owned();
-                let (current, source) = self.options.get(&key);
+                let o = &self.options;
+                let here = o.here(&key, for_game);
+                let (value, from) = o.inherited(&key, for_game);
+                let inherit = format!("Use {from} ({})", o.show(&key, &value));
+                let values: Vec<_> = std::iter::once((None, inherit.clone()))
+                    .chain(o.values(&key).into_iter().map(|(v, l)| (Some(v), l)))
+                    .collect();
+                let at = here
+                    .as_ref()
+                    .and_then(|h| values.iter().position(|(v, _)| v.as_ref() == Some(h)))
+                    .unwrap_or(0);
                 OptionRow {
-                    label: self.options.label(&key),
-                    shown: self.options.show(&key, &current),
-                    source: source.label(console),
-                    values: self.options.values(&key),
-                    current,
+                    label: o.label(&key),
+                    shown: here.as_ref().map_or(inherit, |h| o.show(&key, h)),
+                    inherited: here.is_none(),
+                    values,
+                    at,
+                    wraps: o.wraps(&key),
+                    use_hint: format!("use {from}"),
                     key,
                 }
             })
