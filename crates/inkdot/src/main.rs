@@ -29,7 +29,7 @@ use sdl2::event::Event;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
-use ui::{Action, LookTile, Nav, OptionRow, SlotInfo, Ui};
+use ui::{Action, Nav, OptionRow, SlotInfo, Ui};
 use video::{LcdLook, Video};
 
 /// Set by SIGTERM: DSlot (or systemd) asks the game to be put away.
@@ -135,8 +135,6 @@ struct App {
     gb: GameBoy,
     /// The game, to start it again on the other console.
     rom: Vec<u8>,
-    /// "Not now" to restarting on this console: not asked again until the look changes console.
-    declined: Option<Console>,
     options: Options,
     console: &'static str,
     title: String,
@@ -284,7 +282,6 @@ fn run(args: args::Args) -> Result<(), String> {
     let mut app = App {
         gb,
         rom,
-        declined: None,
         options,
         console,
         title: stem.clone(),
@@ -490,7 +487,10 @@ fn nav_of(pad: Pad) -> Option<Nav> {
         Pad::Right => Nav::Right,
         Pad::A => Nav::A,
         Pad::B => Nav::B,
+        Pad::X => Nav::X,
         Pad::Y => Nav::Y,
+        Pad::L => Nav::L,
+        Pad::R => Nav::R,
         _ => return None,
     })
 }
@@ -628,21 +628,20 @@ impl App {
                 value,
                 for_game,
             } => {
-                if key == "@scope" {
-                    self.model.for_game = value.as_bool().unwrap_or(true);
-                } else {
-                    self.options.set(&key, value, for_game);
-                    self.apply_look();
-                }
+                self.options.set(&key, value, for_game);
+                self.apply_look();
             }
             Action::Unset { key, for_game } => {
                 self.options.unset(&key, for_game);
                 self.apply_look();
             }
             Action::Restart => self.restart(),
-            Action::KeepPlaying => {
-                self.declined = Some(self.model_for(self.wanted_look()));
-                self.model.restart = None;
+            Action::OpenMenu => self.command(Some(Command::PauseMenu)),
+            Action::Clock(hour12) => {
+                if let Err(e) = nibkit::clock::set_hour12(hour12) {
+                    eprintln!("inkdot: cannot keep the clock setting: {e}");
+                }
+                self.model.clock = clock_now();
             }
             Action::ToggleFast => self.fast = !self.fast,
             Action::Brightness { top, percent } => {
@@ -788,14 +787,12 @@ impl App {
             let s = self.look.shades();
             (0..4).map(|i| [s[i][0], s[i][1], s[i][2], 255]).collect()
         };
+        // The look runs on the other console: Play offers to start again on it.
         let other = self.model_for(wanted);
-        if self.declined != Some(other) {
-            self.declined = None;
-        }
-        self.model.restart = (other != self.running() && self.declined.is_none()).then(|| {
+        self.model.restart = (other != self.running()).then(|| {
             match other {
-                Console::Cgb => "Restart as a Game Boy Color for its colours? (Saved first.)",
-                Console::Dmg => "Restart on a Game Boy's own hardware? (Saved first.)",
+                Console::Cgb => "Restart as a Game Boy Color",
+                Console::Dmg => "Restart on a Game Boy",
             }
             .to_owned()
         });
@@ -921,6 +918,10 @@ impl App {
         if self.debug.cycle_looks {
             self.cycle_looks();
         }
+        if let Some(overlay) = self.ui.render_top(&self.model) {
+            let overlay = overlay.map(<[u8]>::to_vec);
+            self.video.set_overlay(overlay.as_deref());
+        }
         let shoot = self.debug.shot.is_some() && self.frame_count == 600;
         let series = self.debug.shots.is_some() && self.frame_count.is_multiple_of(120);
         if let Some(px) = self.video.present_top(look, shoot || series) {
@@ -965,7 +966,8 @@ impl App {
         // The header's clock and battery, when someone may be looking: not while the bottom
         // screen is dimmed or off in play, where redrawing it would only cost frame time.
         let clock = clock_now();
-        let seen = self.ui.menu || self.backlight == Backlight::Lit;
+        // (The clock is only on the menu: the bottom screen is blank in play.)
+        let seen = self.ui.menu;
         if clock != self.model.clock && seen {
             self.model.clock = clock;
             self.model.battery = battery();
@@ -1038,7 +1040,7 @@ impl App {
         let n = self.frame_count;
         if n == 60 {
             self.ui.open_menu();
-            self.ui.go(ui::Page::Look);
+            self.ui.go(ui::Page::Game);
         }
         if n < 180 || !(n - 180).is_multiple_of(240) {
             return;
@@ -1063,7 +1065,7 @@ impl App {
         self.act(Some(step));
         if !self.ui.menu {
             self.ui.open_menu();
-            self.ui.go(ui::Page::Look);
+            self.ui.go(ui::Page::Game);
         }
     }
 
@@ -1138,95 +1140,41 @@ impl App {
                 .map(|i| slot_info(&self.files.state(i)))
                 .collect();
         }
-        let for_game = m.for_game;
-        let (inherited_look, look_from) = self.options.inherited("look", for_game);
-        m.look = self
-            .options
-            .here("look", for_game)
-            .and_then(|v| v.as_str().map(str::to_owned))
-            .unwrap_or_default();
-        m.look_use = format!("use {look_from}");
-        let looks: Vec<LookTile> = if self.console == "GB" {
-            self.options
-                .values("look")
-                .into_iter()
-                .map(|(v, _)| {
-                    let value = v.as_str().unwrap_or("").to_owned();
-                    // The tiles are narrow: the models' short names.
-                    let label = match value.as_str() {
-                        "color" => "Color",
-                        "gameboy" => "Game Boy",
-                        "pocket" => "Pocket",
-                        "light" => "Light",
-                        _ => "Grey",
-                    }
-                    .to_owned();
-                    let swatch = match Look::parse(&value) {
-                        Some(Look::Color) => {
-                            let p = inkdot_core::compat::DEFAULT[0];
-                            [0, 1, 2, 3].map(|i| looks::screen(p[i]))
-                        }
-                        Some(l) => l.shades(),
-                        None => [[0; 3]; 4],
-                    };
-                    LookTile {
-                        value,
-                        label,
-                        swatch,
-                    }
-                })
-                .collect()
-        } else {
-            Vec::new()
-        };
-        // First, "Use …": the look from the level above, with its colours.
-        m.looks = match looks
-            .iter()
-            .find(|t| Some(t.value.as_str()) == inherited_look.as_str())
-        {
-            Some(t) if !looks.is_empty() => std::iter::once(LookTile {
-                value: String::new(),
-                label: format!("Use {look_from}"),
-                swatch: t.swatch,
-            })
-            .chain(looks)
-            .collect(),
-            _ => looks,
-        };
-        m.options = self
-            .options
-            .keys()
-            .into_iter()
-            .map(|key| {
-                let key = key.to_owned();
-                let o = &self.options;
-                let here = o.here(&key, for_game);
-                let (value, from) = o.inherited(&key, for_game);
-                let inherit = format!("Use {from} ({})", o.show(&key, &value));
-                let values: Vec<_> = std::iter::once((None, inherit.clone()))
-                    .chain(o.values(&key).into_iter().map(|(v, l)| (Some(v), l)))
-                    .collect();
-                let at = here
-                    .as_ref()
-                    .and_then(|h| values.iter().position(|(v, _)| v.as_ref() == Some(h)))
-                    .unwrap_or(0);
-                OptionRow {
-                    label: o.label(&key),
-                    shown: here.as_ref().map_or(inherit, |h| o.show(&key, h)),
-                    inherited: here.is_none(),
-                    values,
-                    at,
-                    wraps: o.wraps(&key),
-                    use_hint: format!("use {from}"),
-                    key,
-                }
-            })
-            .collect();
-        if !m.for_game && m.options.is_empty() {
-            m.for_game = true;
-        }
+        m.played = played(self.started.elapsed().as_secs()).replace(" played", " today");
+        m.hour12 = hour12();
+        m.game_options = option_rows(&self.options, true);
+        m.console_options = option_rows(&self.options, false);
         self.ui.touch_up();
     }
+}
+
+/// The options as their rows show them at one level: the game's (`for_game`) or its console's.
+fn option_rows(o: &Options, for_game: bool) -> Vec<OptionRow> {
+    o.keys()
+        .into_iter()
+        .map(|key| {
+            let here = o.here(key, for_game);
+            let (value, from) = o.inherited(key, for_game);
+            let values: Vec<_> = std::iter::once(None)
+                .chain(o.values(key).into_iter().map(|(v, _)| Some(v)))
+                .collect();
+            let at = here
+                .as_ref()
+                .and_then(|h| values.iter().position(|v| v.as_ref() == Some(h)))
+                .unwrap_or(0);
+            OptionRow {
+                key: key.to_owned(),
+                label: o.label(key),
+                here: here.as_ref().map(|h| o.show(key, h)),
+                inherit: format!("Use {from} ({})", o.show(key, &value)),
+                values,
+                at,
+                wraps: o.wraps(key),
+                use_hint: format!("use {from}"),
+                shows: matches!(key, "look" | "palette" | "colors" | "lcd"),
+            }
+        })
+        .collect()
 }
 
 /// Without a ROM on the command line: the list of games on the cards, until one is chosen
@@ -1261,19 +1209,26 @@ fn pick(
                         return None;
                     }
                 }
-                Event::ControllerButtonDown { button, .. } => match pad_of(button) {
-                    Some(Pad::Up) => picker.step(-1),
-                    Some(Pad::Down) => picker.step(1),
-                    Some(Pad::Left | Pad::L) => picker.step(-picker::Picker::page()),
-                    Some(Pad::Right | Pad::R) => picker.step(picker::Picker::page()),
-                    Some(Pad::A | Pad::Start) => start = Some(picker.chosen),
-                    Some(Pad::B) => return None,
-                    _ => {}
-                },
+                Event::ControllerButtonDown { button, .. } => {
+                    use nibkit::menu::Key;
+                    let key = match pad_of(button) {
+                        Some(Pad::Up) => Key::Up,
+                        Some(Pad::Down) => Key::Down,
+                        Some(Pad::L | Pad::Left) => Key::L,
+                        Some(Pad::R | Pad::Right) => Key::R,
+                        Some(Pad::A | Pad::Start) => Key::A,
+                        Some(Pad::B) => Key::B,
+                        _ => continue,
+                    };
+                    match picker.key(key) {
+                        Ok(chosen) => start = chosen.or(start),
+                        Err(()) => return None,
+                    }
+                }
                 Event::MouseButtonDown { x, y, .. } => {
                     start = video
                         .bottom_point(x, y)
-                        .and_then(|(fx, fy)| picker.at(fx, fy));
+                        .and_then(|(fx, fy)| picker.touch(fx, fy));
                 }
                 _ => {}
             }
@@ -1283,14 +1238,14 @@ fn pick(
             panel.poll(&mut pointers);
             for p in pointers.drain(..) {
                 if let nibkit::touch::Pointer::Down(x, y) = p {
-                    start = picker.at(x, y).or(start);
+                    start = picker.touch(x, y).or(start);
                 }
             }
         }
         if let Some(game) = start.and_then(|i| picker.games.get(i)) {
             return Some(game.path.clone());
         }
-        if let Some(px) = picker.render() {
+        if let Some(px) = picker.render(&clock_now()) {
             video.upload_ui(px);
         }
         video.upload_frame(&blank);

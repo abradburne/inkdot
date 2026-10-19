@@ -1,5 +1,6 @@
-//! Renders each page of the bottom screen to PNG files, to look at the interface without the
-//! handheld: `cargo run --example ui_pages -- OUT_DIR`.
+//! Renders each page of the menu to PNG files, the bottom screen and what goes over the game on
+//! the top one, to look at the interface without the handheld:
+//! `cargo run --example ui_pages -- OUT_DIR`.
 
 // The example draws pages; the interface's input handling is the program's.
 #![allow(dead_code)]
@@ -7,7 +8,28 @@
 #[path = "../src/ui/mod.rs"]
 mod ui;
 
-use ui::{LookTile, Model, OptionRow, Page, SlotInfo, Ui};
+use ui::{Model, Nav, OptionRow, Page, SlotInfo, Ui};
+
+fn row(key: &str, label: &str, here: Option<&str>, inherit: &str, shows: bool) -> OptionRow {
+    OptionRow {
+        key: key.into(),
+        label: label.into(),
+        here: here.map(str::to_owned),
+        inherit: inherit.into(),
+        values: vec![None],
+        at: 0,
+        wraps: true,
+        use_hint: "use GB".into(),
+        shows,
+    }
+}
+
+fn save(path: std::path::PathBuf, px: &[u8]) {
+    let file = std::fs::File::create(path).unwrap();
+    let mut enc = png::Encoder::new(std::io::BufWriter::new(file), ui::W as u32, ui::H as u32);
+    enc.set_color(png::ColorType::Rgba);
+    enc.write_header().unwrap().write_image_data(px).unwrap();
+}
 
 fn main() {
     let out = std::path::PathBuf::from(std::env::args().nth(1).unwrap_or_else(|| ".".into()));
@@ -19,148 +41,79 @@ fn main() {
         })
         .collect();
     let mut slots = vec![SlotInfo::default(); 7];
-    slots[1] = SlotInfo {
-        picture: Some(picture.clone()),
-        made: "Oct 19 12:40".into(),
-        played: "1 h 23 min played".into(),
-    };
-    slots[3] = SlotInfo {
-        picture: Some(picture),
-        made: "Oct 18 21:02".into(),
-        played: "58 min played".into(),
-    };
-    let looks = [
-        (
-            "",
-            "Use GB",
-            [
-                [0x6f, 0xd8, 0xb8],
-                [0x3c, 0xa3, 0x89],
-                [0x1f, 0x67, 0x58],
-                [0x0b, 0x2e, 0x2a],
-            ],
-        ),
-        (
-            "color",
-            "Game Boy Color",
-            [
-                [0xff, 0xff, 0xff],
-                [0x7b, 0xff, 0x31],
-                [0x00, 0x63, 0xc5],
-                [0, 0, 0],
-            ],
-        ),
-        (
-            "gameboy",
-            "Game Boy",
-            [
-                [0xc4, 0xcc, 0x92],
-                [0x87, 0x97, 0x62],
-                [0x4b, 0x5c, 0x41],
-                [0x22, 0x30, 0x29],
-            ],
-        ),
-        (
-            "pocket",
-            "Game Boy Pocket",
-            [
-                [0xdc, 0xdb, 0xcf],
-                [0xa2, 0xa1, 0x96],
-                [0x5f, 0x5f, 0x58],
-                [0x24, 0x25, 0x23],
-            ],
-        ),
-        (
-            "light",
-            "Game Boy Light",
-            [
-                [0x6f, 0xd8, 0xb8],
-                [0x3c, 0xa3, 0x89],
-                [0x1f, 0x67, 0x58],
-                [0x0b, 0x2e, 0x2a],
-            ],
-        ),
-        (
-            "grey",
-            "Plain grey",
-            [[0xff; 3], [0xaa; 3], [0x55; 3], [0; 3]],
-        ),
-    ]
-    .into_iter()
-    .map(|(v, l, s)| LookTile {
-        value: v.into(),
-        label: l.into(),
-        swatch: s,
-    })
-    .collect();
-    // A row set at this level (`here`), or showing where its value comes from.
-    let row = |key: &str, label: &str, shown: &str, here: bool| OptionRow {
-        key: key.into(),
-        label: label.into(),
-        shown: shown.into(),
-        inherited: !here,
-        values: vec![(None, shown.into())],
-        at: 0,
-        wraps: true,
-        use_hint: "use GB".into(),
-    };
+    for (n, made) in [(1, "Today 4:41 PM"), (2, "Yesterday"), (0, "Today 5:02 PM")] {
+        slots[n] = SlotInfo {
+            picture: Some(picture.clone()),
+            made: made.into(),
+            played: "1 h 23 min played".into(),
+        };
+    }
     let m = Model {
-        title: "Super Mario Land 2 - 6 Golden Coins (USA, Europe)".into(),
-        clock: "12:41".into(),
+        title: "Super Mario Land 2".into(),
+        console: "GB".into(),
+        clock: "5:05 PM".into(),
         battery: Some(76),
+        played: "24 min today".into(),
         slots,
-        quick_slot: 1,
-        looks,
-        look: "gameboy".into(),
-        look_use: "use GB".into(),
-        restart: Some("Restart on a real Game Boy? (Same colours now.)".into()),
-        options: vec![
-            row("lcd", "LCD texture", "Use default (On)", false),
-            row("speed", "Timing", "Use default (Smooth)", false),
-            row(
-                "bottom",
-                "Bottom screen in play",
-                "Use GB (Dim when idle)",
-                false,
-            ),
-            row(
-                "resume",
-                "Resume where I left off",
-                "Use default (On)",
-                false,
-            ),
-            row("fast", "Fast-forward speed", "6x", true),
-        ],
+        quick_slot: 2,
         fast: false,
+        game_options: vec![
+            row(
+                "look",
+                "Look",
+                Some("Game Boy Pocket"),
+                "Use GB (Game Boy (green))",
+                true,
+            ),
+            row("lcd", "LCD texture", None, "Use default (On)", true),
+            row("speed", "Timing", None, "Use default (Smooth)", false),
+            row(
+                "fast",
+                "Fast-forward speed",
+                Some("6x"),
+                "Use default (4x)",
+                false,
+            ),
+        ],
+        console_options: vec![row(
+            "look",
+            "Look",
+            Some("Game Boy (green)"),
+            "Use default (Game Boy Color)",
+            true,
+        )],
         top_brightness: Some(60),
         bottom_brightness: Some(40),
         volume: Some(70),
-        for_game: true,
-        console: "GB".into(),
+        hour12: true,
+        restart: Some("Restart on a Game Boy".into()),
         toast: None,
     };
     let mut ui = Ui::new();
-    for (name, page, menu) in [
-        ("play", Page::Play, false),
-        ("play-menu", Page::Play, true),
-        ("states", Page::States, false),
-        ("look", Page::Look, false),
-        ("options", Page::Options, false),
+    ui.open_menu();
+    for (name, page, moves) in [
+        ("play", Page::Play, 0),
+        ("states", Page::States, 1),
+        ("game", Page::Game, 0),
+        ("game-timing", Page::Game, 2),
+        ("console", Page::Console, 0),
+        ("system", Page::System, 0),
     ] {
-        if menu {
-            ui.open_menu()
-        } else {
-            ui.close_menu();
-        }
         ui.go(page);
-        let mut m = m.clone();
-        if name == "play" {
-            m.toast = Some("Saved to slot 1".into());
+        for _ in 0..moves {
+            ui.nav(
+                &m,
+                if page == Page::States {
+                    Nav::Right
+                } else {
+                    Nav::Down
+                },
+            );
         }
-        let px = ui.render(&m).unwrap().to_vec();
-        let file = std::fs::File::create(out.join(format!("{name}.png"))).unwrap();
-        let mut enc = png::Encoder::new(std::io::BufWriter::new(file), ui::W as u32, ui::H as u32);
-        enc.set_color(png::ColorType::Rgba);
-        enc.write_header().unwrap().write_image_data(&px).unwrap();
+        let bottom = ui.render(&m).unwrap().to_vec();
+        save(out.join(format!("{name}-bottom.png")), &bottom);
+        if let Some(Some(top)) = ui.render_top(&m) {
+            save(out.join(format!("{name}-top.png")), top);
+        }
     }
 }

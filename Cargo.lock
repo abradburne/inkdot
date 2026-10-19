@@ -247,6 +247,7 @@ dependencies = [
 name = "nibkit"
 version = "0.1.0"
 dependencies = [
+ "fontdue",
  "libc",
  "serde",
  "toml",

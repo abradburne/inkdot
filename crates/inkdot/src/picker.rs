@@ -1,10 +1,11 @@
 //! Choosing a game, when inkdot is started without one (from the stock OS's Apps, or by hand):
 //! the `.gb`, `.gbc` and `.zip` files in the `GB` and `GBC` folders of each card's `Roms`, as a
-//! list on the bottom screen. The D-pad or a finger moves through it; A or a tap starts the game,
-//! B or Back leaves.
+//! list on the bottom screen in DSlot's menu (nibkit's `menu`). The D-pad or a finger moves
+//! through it, L and R a screenful at a time; A or a tap on the highlighted game starts it, B or
+//! Back leaves.
 
-use crate::ui::draw::{colour, Align, Canvas, Rect, BODY, SMALL, TITLE};
-use crate::ui::{H, W};
+use nibkit::menu::raster::{Canvas, Fonts};
+use nibkit::menu::{colour, layout, Effect, Key, Menu, Row, Status, Value};
 use std::path::{Path, PathBuf};
 
 /// A game found on a card.
@@ -41,110 +42,90 @@ pub fn find(roots: &[PathBuf]) -> Vec<Game> {
     games
 }
 
-const ROW: i32 = 72;
-const TOP: i32 = 96;
-const ROWS: usize = ((H - TOP - 48) / ROW) as usize;
-
-/// The list's state: what is chosen and what is shown.
+/// The list's state.
 pub struct Picker {
     pub games: Vec<Game>,
-    pub chosen: usize,
-    first: usize,
+    menu: Menu,
+    fonts: Fonts,
     canvas: Canvas,
     dirty: bool,
 }
 
 impl Picker {
     pub fn new(games: Vec<Game>) -> Picker {
+        let sep = "   \u{b7}   ";
+        let menu = Menu {
+            tabs: Vec::new(),
+            title: if games.is_empty() {
+                "NO GAMES IN ROMS/GB OR ROMS/GBC ON EITHER CARD".into()
+            } else {
+                "CHOOSE A GAME".into()
+            },
+            rows: games
+                .iter()
+                .map(|g| Row::new(format!("{}  ({})", g.name, g.console), Value::None))
+                .collect(),
+            row: 0,
+            scroll: 0,
+            hint: format!("A  play{sep}D-pad  move{sep}L / R  page{sep}B  leave"),
+        };
         Picker {
             games,
-            chosen: 0,
-            first: 0,
-            canvas: Canvas::new(W, H),
+            menu,
+            fonts: Fonts::new(),
+            canvas: Canvas::new(1.0),
             dirty: true,
         }
     }
 
-    /// Moves the choice by `d` rows (a page: ±ROWS).
-    pub fn step(&mut self, d: isize) {
-        if self.games.is_empty() {
-            return;
-        }
-        let last = self.games.len() - 1;
-        self.chosen = (self.chosen as isize + d).clamp(0, last as isize) as usize;
-        if self.chosen < self.first {
-            self.first = self.chosen;
-        } else if self.chosen >= self.first + ROWS {
-            self.first = self.chosen + 1 - ROWS;
-        }
+    /// The highlighted game.
+    #[cfg(test)]
+    pub fn chosen(&self) -> usize {
+        self.menu.row
+    }
+
+    /// A button: the game to start, if one was chosen; `Err(())` to leave.
+    pub fn key(&mut self, key: Key) -> Result<Option<usize>, ()> {
         self.dirty = true;
-    }
-
-    pub fn page() -> isize {
-        ROWS as isize
-    }
-
-    /// The game at a point on the bottom screen (fractions of its size), if any.
-    pub fn at(&self, fx: f32, fy: f32) -> Option<usize> {
-        let (x, y) = ((fx * W as f32) as i32, (fy * H as f32) as i32);
-        if !(0..W).contains(&x) || y < TOP {
-            return None;
+        let screenful = |k| std::iter::repeat_n(k, layout::VISIBLE);
+        match key {
+            Key::L => screenful(Key::Up).for_each(|k| {
+                let _ = self.menu.key(k);
+            }),
+            Key::R => screenful(Key::Down).for_each(|k| {
+                let _ = self.menu.key(k);
+            }),
+            k => match self.menu.key(k) {
+                Some(Effect::Choose(i)) => return Ok(Some(i)),
+                Some(Effect::Back) => return Err(()),
+                _ => {}
+            },
         }
-        let i = self.first + ((y - TOP) / ROW) as usize;
-        (i < self.games.len() && i < self.first + ROWS).then_some(i)
+        Ok(None)
+    }
+
+    /// A finger down at a point on the bottom screen (fractions of its size): the game to
+    /// start, when it was the highlighted one.
+    pub fn touch(&mut self, fx: f32, fy: f32) -> Option<usize> {
+        self.dirty = true;
+        match self.menu.touch(fx * nibkit::menu::W, fy * nibkit::menu::H) {
+            Some(Effect::Choose(i)) => Some(i),
+            _ => None,
+        }
     }
 
     /// The picture, when it has changed.
-    pub fn render(&mut self) -> Option<&[u8]> {
+    pub fn render(&mut self, clock: &str) -> Option<&[u8]> {
         if !std::mem::take(&mut self.dirty) {
             return None;
         }
-        let c = &mut self.canvas;
-        c.clear(colour::BACKGROUND);
-        c.text(
-            Rect::new(32, 12, W - 64, 64),
-            "Choose a game",
-            TITLE,
-            colour::TEXT,
-            Align::Left,
-        );
-        c.fill(Rect::new(0, TOP - 8, W, 2), colour::LINE);
-        if self.games.is_empty() {
-            c.text(
-                Rect::new(32, TOP + 40, W - 64, 48),
-                "No games in Roms/GB or Roms/GBC on either card.",
-                BODY,
-                colour::DIM,
-                Align::Centre,
-            );
-        }
-        for (row, g) in self.games.iter().enumerate().skip(self.first).take(ROWS) {
-            let r = Rect::new(16, TOP + (row - self.first) as i32 * ROW, W - 32, ROW - 8);
-            if row == self.chosen {
-                c.round(r, 20, colour::PANEL_LIT);
-            }
-            c.text(
-                Rect::new(r.x + 24, r.y, r.w - 140, r.h),
-                &g.name,
-                BODY,
-                colour::TEXT,
-                Align::Left,
-            );
-            c.text(
-                Rect::new(r.x + r.w - 120, r.y, 100, r.h),
-                g.console,
-                SMALL,
-                colour::DIM,
-                Align::Right,
-            );
-        }
-        c.text(
-            Rect::new(32, H - 44, W - 64, 36),
-            "A to play · B to leave",
-            SMALL,
-            colour::DIM,
-            Align::Centre,
-        );
+        self.canvas.clear(colour::BLACK);
+        let status = Status {
+            clock: clock.to_owned(),
+            ..Status::default()
+        };
+        self.canvas
+            .draw(&self.fonts, &layout::menu(&self.menu, &status), |_| None);
         Some(&self.canvas.px)
     }
 }
@@ -181,7 +162,7 @@ mod tests {
     }
 
     #[test]
-    fn the_list_scrolls_with_the_choice() {
+    fn the_list_moves_and_chooses() {
         let games = (0..30)
             .map(|i| Game {
                 path: PathBuf::from(format!("{i}.gb")),
@@ -190,13 +171,12 @@ mod tests {
             })
             .collect();
         let mut p = Picker::new(games);
-        p.step(-1);
-        assert_eq!(p.chosen, 0);
-        p.step(ROWS as isize);
-        assert_eq!((p.chosen, p.first), (ROWS, 1));
-        p.step(100);
-        assert_eq!(p.chosen, 29);
-        assert_eq!(p.at(0.5, (TOP as f32 + 1.0) / H as f32), Some(p.first));
-        assert!(p.render().is_some() && p.render().is_none());
+        assert_eq!(p.key(Key::Up), Ok(None));
+        assert_eq!(p.chosen(), 0);
+        p.key(Key::R).unwrap();
+        assert_eq!(p.chosen(), layout::VISIBLE);
+        assert_eq!(p.key(Key::A), Ok(Some(layout::VISIBLE)));
+        assert_eq!(p.key(Key::B), Err(()));
+        assert!(p.render("5:05 PM").is_some() && p.render("5:05 PM").is_none());
     }
 }

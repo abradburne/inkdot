@@ -6,7 +6,7 @@ inkdot plays games in `.gb`, `.gbc`, or a `.zip` with one in it. It can be start
 - **From Apps on the stock OS**: copy the stock zip's `Roms` folder onto the games card. It
   opens with a list of the games in `Roms/GB` and `Roms/GBC` on both cards.
 - **By hand**: `inkdot game.gbc`, or `inkdot` alone for the list. `inkdot --help` gives the
-  options, which are the same as on the Options page (`--look pocket`, `--no-lcd`, `--fast 6`).
+  options, which are the same as on the menu's Game page (`--look pocket`, `--no-lcd`, `--fast 6`).
 
 Leaving the game (Menu, or Quit on the bottom screen) saves where you are; the next start
 resumes there.
@@ -18,7 +18,7 @@ resumes there.
 | A, B, Select, Start, D-pad or stick | the Game Boy's buttons |
 | X, Y | turbo A, turbo B |
 | R2 (held) | fast-forward (silent) |
-| Back | the menu on the bottom screen; the game pauses; D-pad and A to choose, B to go back, Back again to play |
+| Back | the menu on the bottom screen; the game pauses; D-pad, A and L / R to choose, B to go back to the game |
 | Menu | save and leave (back to DSlot's shelf) |
 | Menu + R / Menu + L | quick save / quick load |
 | Menu + Select | fast-forward on or off |
@@ -26,22 +26,28 @@ resumes there.
 
 ## The bottom screen
 
-While the game plays, the bottom screen has six tiles: **Save** and **Load** (each opens the six
-slots, with each state's picture, date and play time, and empty ones marked; saving over a state
-asks for a second tap), **Look**, **Fast**, **Options** and **Quit**. Menu + R saves straight into
-the quick slot, the last one saved or loaded, and Menu + L loads it. The time at the top, and the dates of save states, are 12- or 24-hour as chosen in DSlot's
-System page (nibOS's shared clock setting; by default, as the language's custom). Untouched for
-ten seconds it dims, or turns off (see Options); a touch
-wakes it without doing anything else.
+While the game plays the bottom screen is blank. **Back**, or a tap on it, pauses the game and
+opens the menu there: DSlot's own menu, with its tabs, rows and button hints, so it works the
+same way.
+
+| Page | |
+|---|---|
+| **Play** | Resume, Save state, Load state, Fast-forward, Save and quit; and, when the look you chose runs on the other console, starting the game again on it (A, then A again: where you are is saved first) |
+| **States** | The six slots and the resume point as cards: the highlighted one's picture, date and play time on the top screen. A loads; X saves into it (X again to save over a state) |
+| **Game**, **GB** / **GBC** | The options for this game, and for every game of its console |
+| **System** | Both screens' brightness, the volume, and the clock (12- or 24-hour, for every app) |
+
+L and R (or a tap on a tab) change page; up and down choose a row, left and right change it, A
+acts on it; B goes back to the game. While the menu is open the top screen shows the game
+dimmed, or as it is while you change how it looks.
 
 ## Options
 
-Each option can be set for one game or for all of its console's games: the two buttons at the
-top of the Look and Options pages choose which. A row's first choice is **Use …**, where its
-value comes from when it isn't set there: "Use GB (Light)" when all GB games have it, "Use
-default (On)" when nothing sets it. While a row uses that, it shows it muted; set there, it shows
-the value. Stepping back round to "Use …", or Y on a row set there, clears it at that level. The
-Look page's first tile does the same for the look. DSlot's menu shows the same levels. An option
+Each option can be set for one game (the **Game** page) or for all of its console's games (the
+**GB** or **GBC** page). A row's first choice is **Use …**, where its value comes from when it
+isn't set there: "Use GB (Light)" when all GB games have it, "Use default (On)" when nothing sets
+it. While a row uses that, it shows it muted; set there, it shows the value. Stepping back round
+to "Use …", or Y on a row set there, clears it at that level. DSlot's menu shows the same pages. An option
 given on the command line wins for that run, until it's changed in the menu.
 
 The choices are kept in `settings.toml`. In the nibOS package (built with DSlot's part) that is
@@ -50,7 +56,7 @@ inkdot's (`~/.config/inkdot/`, or beside the program on the stock OS).
 
 | Option | | Default |
 |---|---|---|
-| Look (GB games) | Game Boy Color (the CGB's own colouring), Game Boy, Game Boy Pocket, Game Boy Light, plain grey. The Color look runs the game on a CGB, the others on a DMG. A new look shows at once, even paused; a DMG look on a game running as a CGB uses that look's colours straight away, and offers to restart on a real DMG; the Color look on a game running as a DMG needs a restart, which it offers (where you are is saved first, and each console keeps its own resume point). | Game Boy Color |
+| Look (GB games) | Game Boy Color (the CGB's own colouring), Game Boy, Game Boy Pocket, Game Boy Light, plain grey. The Color look runs the game on a CGB, the others on a DMG. A new look shows at once, even paused; a DMG look on a game running as a CGB uses that look's colours straight away, and Play offers to restart on a real DMG; the Color look on a game running as a DMG needs a restart, which Play offers (where you are is saved first, and each console keeps its own resume point). | Game Boy Color |
 | Colours (Color look) | By title (as a Game Boy Color picks them), or one of the twelve palettes a Game Boy Color offers for a button held at start-up | By title |
 | Colours (GBC games) | as on its screen (darker and softer, like the original), or as stored | As on its screen |
 | LCD texture | a faint grid between pixels and the original screens' slow pixels | On |

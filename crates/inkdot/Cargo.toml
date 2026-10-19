@@ -11,7 +11,7 @@ authors.workspace = true
 inkdot-core = { path = "../inkdot-core" }
 # nibOS's SDK library (sdk/nibkit in the nibOS repository, MIT): the screens, vblank, buttons,
 # touch, brightness, paths, settings and DSlot's description format.
-nibkit = { path = "../../../nibos/sdk/nibkit", default-features = false }
+nibkit = { path = "../../../nibos/sdk/nibkit", default-features = false, features = ["menu-raster"] }
 # SDL2's API, linked against the system's SDL2 (sdl2-compat on SDL3), as DSlot does.
 sdl2 = "0.38"
 glow = "0.14"

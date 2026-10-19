@@ -1,20 +1,22 @@
-//! The bottom screen: the emulator's controls, made for a thumb.
+//! The menu on the bottom screen, and what the top screen shows while it is open: DSlot's own
+//! menu (nibkit's `menu`), so pausing a game feels like opening DSlot on it.
 //!
 //! | Page | |
 //! |---|---|
-//! | Play | while the game runs: save, load, the look, fast-forward, options, quit |
-//! | States | six slots with their pictures: load one, or save into one |
-//! | Look | how the game looks (DMG games: as a GBC, a Game Boy, a Pocket, a Light, grey) |
-//! | Options | timing, the bottom screen in play, resume, fast-forward speed; brightness, volume |
+//! | Play | resume, save and load a state, fast-forward, starting again on the other console, save and quit |
+//! | States | the six slots and the resume point as a shelf of cards, the highlighted one's picture on the top screen |
+//! | Game, GB / GBC | the options for this game, and for every game of its console (the same rows as DSlot's pages) |
+//! | System | both screens' brightness, the volume, the clock |
 //!
-//! Every page is a list of widgets with their places; the same list draws the page, finds what a
-//! finger touched and moves the focus for the D-pad (when the menu is opened with Back, which
-//! pauses the game). A widget does one [`Action`], which the main loop carries out and answers
-//! by updating the [`Model`].
+//! While the game plays the bottom screen is blank; Back or a tap opens the menu (the game
+//! pauses). The pages are built from a [`Model`] the main loop keeps up to date; a button or a
+//! touch comes back as an [`Action`] for it to carry out.
 
-pub mod draw;
-
-use draw::{colour, Align, Canvas, Rect, Rgb, BODY, LABEL, SMALL, TITLE};
+use nibkit::menu::raster::{Canvas, Fonts};
+use nibkit::menu::{
+    self, colour, layout, Card, Draw, Effect, Key, Menu, Row, Shelf, Slot, Status, Value,
+};
+use nibkit::settings::Value as Setting;
 
 /// The screen's size.
 pub const W: i32 = 1024;
@@ -23,13 +25,15 @@ pub const H: i32 = 768;
 /// What the interface asks the emulator to do.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Action {
+    /// Pause and show the menu (a tap on the blank bottom screen).
+    OpenMenu,
     /// Save the game to slot n (1-6), or the quick slot (0).
     Save(usize),
     Load(usize),
-    /// Set an option (its key in the description) to a value, for this game or for its console.
+    /// Set an option (its key) to a value, for this game or for its console.
     Set {
         key: String,
-        value: nibkit::settings::Value,
+        value: Setting,
         for_game: bool,
     },
     /// Clear an option at this game's level or its console's, so the level above applies.
@@ -39,20 +43,20 @@ pub enum Action {
     },
     /// Start the game again on the console its look runs on.
     Restart,
-    /// Leave it on this console.
-    KeepPlaying,
     ToggleFast,
     Brightness {
         top: bool,
         percent: u8,
     },
     Volume(u8),
+    /// 12-hour (true) or 24-hour clock, for every app.
+    Clock(bool),
     /// Close the menu and play.
     Resume,
     Quit,
 }
 
-/// A save state slot as the States page shows it.
+/// A save state slot as the shelf shows it.
 #[derive(Clone, Debug, Default)]
 pub struct SlotInfo {
     /// 160×144 RGBA.
@@ -61,122 +65,136 @@ pub struct SlotInfo {
     pub played: String,
 }
 
-/// An option row: its key, label, value shown, where it comes from, whether set for the game.
+/// An option as its rows show it, at one level.
 #[derive(Clone, Debug)]
 pub struct OptionRow {
     pub key: String,
     pub label: String,
-    /// What the row shows: the value set at this level, or where it comes from instead
-    /// ("Use GB (Light)", "Use default (On)").
-    pub shown: String,
-    /// Not set at this level: shown muted.
-    pub inherited: bool,
-    /// The choices in order, for the row's arrows: first "Use …" (`None`: not set here), then
-    /// the values.
-    pub values: Vec<(Option<nibkit::settings::Value>, String)>,
+    /// The value set at this level, shown; `None` when it comes from the level above.
+    pub here: Option<String>,
+    /// "Use GB (Light)", "Use default (On)".
+    pub inherit: String,
+    /// The choices in order, for left and right: first "Use …" (`None`), then the values.
+    pub values: Vec<Option<Setting>>,
     /// Which of them is the row's now.
     pub at: usize,
     /// Choices go round; a number stops at its ends.
     pub wraps: bool,
-    /// What Y does on a row set here: "use GB", "use default".
+    /// What Y does on it set here: "use GB".
     pub use_hint: String,
-}
-
-/// A look as the Look page shows it.
-#[derive(Clone, Debug)]
-pub struct LookTile {
-    pub value: String,
-    pub label: String,
-    pub swatch: [Rgb; 4],
+    /// What it changes shows on the top screen (the look's rows): don't dim the game there.
+    pub shows: bool,
 }
 
 /// What the interface shows: the main loop keeps it up to date.
 #[derive(Clone, Debug, Default)]
 pub struct Model {
     pub title: String,
+    /// "GB" or "GBC": the console's page.
+    pub console: String,
     pub clock: String,
     pub battery: Option<u8>,
+    /// Today's play time, as the paused screen says it.
+    pub played: String,
+    /// Slots 0 (the resume point) to 6.
     pub slots: Vec<SlotInfo>,
     pub quick_slot: usize,
-    pub looks: Vec<LookTile>,
-    /// The look set at this level; empty when it comes from the level above (the "Use …" tile).
-    pub look: String,
-    /// What Y does when the look is set here: "use GB".
-    pub look_use: String,
-    /// The look runs on the other console: the question to restart on it.
-    pub restart: Option<String>,
-    pub options: Vec<OptionRow>,
     pub fast: bool,
+    /// The options for this game, and for every game of its console.
+    pub game_options: Vec<OptionRow>,
+    pub console_options: Vec<OptionRow>,
     pub top_brightness: Option<u8>,
     pub bottom_brightness: Option<u8>,
     pub volume: Option<u8>,
-    /// Options are changed for the game (true) or for its console.
-    pub for_game: bool,
-    pub console: String,
+    pub hour12: bool,
+    /// The look runs on the other console: what starting again on it is called.
+    pub restart: Option<String>,
     pub toast: Option<String>,
 }
 
-/// The pages.
+/// The pages, in their tabs' order.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Page {
     Play,
     States,
-    Look,
-    Options,
+    Game,
+    Console,
+    System,
 }
 
-#[derive(Clone, Debug)]
-enum Kind {
-    Tile {
-        label: &'static str,
-        sub: String,
-        icon: Icon,
-    },
-    Back,
-    Tab {
-        label: String,
-        on: bool,
-    },
-    Slot(usize),
-    Look(usize),
-    Row(usize),
-    Slider {
-        label: String,
-        value: u8,
-    },
-}
+const PAGES: [Page; 5] = [
+    Page::Play,
+    Page::States,
+    Page::Game,
+    Page::Console,
+    Page::System,
+];
 
-#[derive(Clone, Copy, Debug)]
-enum Icon {
-    Save,
-    Load,
-    Look,
+/// What a row does.
+#[derive(Clone, Debug, PartialEq)]
+enum Does {
+    Resume,
+    SaveState,
+    LoadState,
     Fast,
-    Options,
+    Restart,
     Quit,
+    Option { key: String, for_game: bool },
+    Brightness { top: bool },
+    Volume,
+    Clock,
+    Nothing,
 }
 
-#[derive(Clone, Debug)]
-struct Widget {
-    rect: Rect,
-    kind: Kind,
-    action: Option<Action>,
+/// A button the menu answers (the D-pad, A, B, X, Y, L, R).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Nav {
+    Up,
+    Down,
+    Left,
+    Right,
+    A,
+    B,
+    X,
+    Y,
+    L,
+    R,
 }
 
 /// The interface's state.
 pub struct Ui {
     pub page: Page,
-    /// Opened with Back: the game is paused and the D-pad moves the focus.
+    /// Open (the game paused) or not (the bottom screen blank).
     pub menu: bool,
-    states_saving: bool,
-    /// Saving into a slot that holds a state: tapped once, waiting for a second tap to replace it.
-    confirm: Option<usize>,
-    focus: usize,
-    canvas: Canvas,
+    /// Each page's highlighted row, and its first row on screen.
+    rows: [(usize, usize); 5],
+    /// The highlighted card on States: its place on the shelf (slots 1-6, then the resume
+    /// point).
+    card: usize,
+    /// An action waiting for its second press: which one.
+    confirm: Option<Confirm>,
+    fonts: Fonts,
+    bottom: Canvas,
+    top: Canvas,
     dirty: bool,
+    /// The top screen's overlay needs drawing again.
+    top_dirty: bool,
 }
 
-const HEADER: i32 = 88;
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Confirm {
+    Restart,
+    SaveOver(usize),
+}
+
+/// The slot on the shelf's place `at`: slots 1-6, then the resume point (0).
+fn slot_at(at: usize) -> usize {
+    if at < 6 {
+        at + 1
+    } else {
+        0
+    }
+}
 
 impl Default for Ui {
     fn default() -> Ui {
@@ -189,27 +207,30 @@ impl Ui {
         Ui {
             page: Page::Play,
             menu: false,
-            states_saving: false,
+            rows: [(0, 0); 5],
+            card: 0,
             confirm: None,
-            focus: 0,
-            canvas: Canvas::new(W, H),
+            fonts: Fonts::new(),
+            bottom: Canvas::new(1.0),
+            top: Canvas::new(1.0),
             dirty: true,
+            top_dirty: true,
         }
     }
 
     /// Something shown changed: draw again.
     pub fn touch_up(&mut self) {
         self.dirty = true;
+        self.top_dirty = true;
     }
 
     pub fn go(&mut self, page: Page) {
         self.page = page;
         self.confirm = None;
-        self.focus = 0;
-        self.dirty = true;
+        self.touch_up();
     }
 
-    /// Opens the menu (Back pressed): paused, the focus shown.
+    /// Opens the menu on Play (the game pauses).
     pub fn open_menu(&mut self) {
         self.menu = true;
         self.go(Page::Play);
@@ -217,777 +238,564 @@ impl Ui {
 
     pub fn close_menu(&mut self) {
         self.menu = false;
-        self.go(Page::Play);
+        self.confirm = None;
+        self.touch_up();
     }
 
-    fn widgets(&self, m: &Model) -> Vec<Widget> {
-        let mut w = Vec::new();
-        if self.page != Page::Play {
-            w.push(Widget {
-                rect: Rect::new(16, 12, 150, 64),
-                kind: Kind::Back,
-                action: None,
-            });
-        }
+    fn index(page: Page) -> usize {
+        PAGES.iter().position(|p| *p == page).unwrap_or(0)
+    }
+
+    fn tabs(&self, m: &Model) -> Vec<(String, bool)> {
+        PAGES
+            .iter()
+            .map(|p| {
+                let name = match p {
+                    Page::Play => "Play".to_owned(),
+                    Page::States => "States".to_owned(),
+                    Page::Game => "Game".to_owned(),
+                    Page::Console => m.console.clone(),
+                    Page::System => "System".to_owned(),
+                };
+                (name, *p == self.page)
+            })
+            .collect()
+    }
+
+    /// The page's rows, what each does, and the line under the tabs.
+    fn rows(&self, m: &Model) -> (Vec<(Row, Does)>, String) {
+        let row = |label: &str, value: Value, does: Does| (Row::new(label, value), does);
+        let quick = format!("Slot {}", m.quick_slot.max(1));
         match self.page {
             Page::Play => {
-                let (x0, y0, tw, th, gap) = (32, HEADER + 24, 304, 290, 24);
-                let tiles: [(&'static str, String, Icon, Option<Action>); 6] = [
-                    ("Save", "Pick a slot".into(), Icon::Save, None),
-                    ("Load", "Pick a slot".into(), Icon::Load, None),
-                    (
-                        "Look",
-                        m.looks
-                            .iter()
-                            .find(|l| l.value == m.look)
-                            .map(|l| l.label.clone())
-                            .unwrap_or_default(),
-                        Icon::Look,
-                        None,
+                let mut rows = vec![
+                    row("Resume", Value::None, Does::Resume),
+                    row("Save state", Value::More(quick.clone()), Does::SaveState),
+                    row("Load state", Value::More(quick), Does::LoadState),
+                    row(
+                        "Fast-forward",
+                        Value::Text(if m.fast { "On" } else { "Off" }.into()),
+                        Does::Fast,
                     ),
-                    (
-                        "Fast",
-                        if m.fast { "On".into() } else { "Off".into() },
-                        Icon::Fast,
-                        Some(Action::ToggleFast),
-                    ),
-                    ("Options", String::new(), Icon::Options, None),
-                    ("Quit", "Saves first".into(), Icon::Quit, Some(Action::Quit)),
                 ];
-                for (i, (label, sub, icon, action)) in tiles.into_iter().enumerate() {
-                    let (col, row) = (i as i32 % 3, i as i32 / 3);
-                    let rect = Rect::new(x0 + col * (tw + gap), y0 + row * (th + gap), tw, th);
-                    w.push(Widget {
-                        rect,
-                        kind: Kind::Tile { label, sub, icon },
-                        action,
-                    });
-                }
-            }
-            Page::States => {
-                for (i, (label, on)) in
-                    [("Load", !self.states_saving), ("Save", self.states_saving)]
-                        .into_iter()
-                        .enumerate()
-                {
-                    let rect = Rect::new(W - 32 - 2 * 180 + i as i32 * 180, 12, 172, 64);
-                    w.push(Widget {
-                        rect,
-                        kind: Kind::Tab {
-                            label: label.into(),
-                            on,
-                        },
-                        action: None,
-                    });
-                }
-                let (tw, th, gap_x) = (280, 252, 40);
-                let x0 = (W - 3 * tw - 2 * gap_x) / 2;
-                for i in 0..6 {
-                    let (col, row) = (i as i32 % 3, i as i32 / 3);
-                    let rect = Rect::new(
-                        x0 + col * (tw + gap_x),
-                        HEADER + 20 + row * (th + 88),
-                        tw,
-                        th + 64,
-                    );
-                    let slot = i + 1;
-                    let empty = m.slots.get(slot).is_none_or(|s| s.picture.is_none());
-                    let action = if self.states_saving {
-                        Some(Action::Save(slot))
-                    } else if empty {
-                        None
-                    } else {
-                        Some(Action::Load(slot))
-                    };
-                    w.push(Widget {
-                        rect,
-                        kind: Kind::Slot(slot),
-                        action,
-                    });
-                }
-            }
-            Page::Look => {
-                for (i, (label, on)) in
-                    [("This game", m.for_game), (m.console.as_str(), !m.for_game)]
-                        .into_iter()
-                        .enumerate()
-                {
-                    let rect = Rect::new(W - 32 - 2 * 200 + i as i32 * 200, 12, 192, 64);
-                    let label = if i == 1 {
-                        format!("All {label}")
-                    } else {
-                        label.to_owned()
-                    };
-                    w.push(Widget {
-                        rect,
-                        kind: Kind::Tab { label, on },
-                        action: None,
-                    });
-                }
-                let n = m.looks.len().max(1) as i32;
-                let gap = 16;
-                let tw = (W - 64 - (n - 1) * gap) / n;
-                for i in 0..m.looks.len() {
-                    let rect = Rect::new(32 + i as i32 * (tw + gap), HEADER + 24, tw, 260);
-                    // The first tile, "Use …", clears the look at this level.
-                    let action = Some(if m.looks[i].value.is_empty() {
-                        Action::Unset {
-                            key: "look".into(),
-                            for_game: m.for_game,
+                if let Some(restart) = &m.restart {
+                    let value = if self.confirm == Some(Confirm::Restart) {
+                        Value::Prompt {
+                            text: "A again (saved first)".into(),
+                            warning: false,
                         }
                     } else {
-                        Action::Set {
-                            key: "look".into(),
-                            value: m.looks[i].value.as_str().into(),
-                            for_game: m.for_game,
-                        }
-                    });
-                    w.push(Widget {
-                        rect,
-                        kind: Kind::Look(i),
-                        action,
-                    });
-                }
-                let rows: Vec<usize> = (0..m.options.len())
-                    .filter(|&i| matches!(m.options[i].key.as_str(), "lcd" | "palette" | "colors"))
-                    .collect();
-                for (k, i) in rows.into_iter().enumerate() {
-                    let rect = Rect::new(32, HEADER + 312 + k as i32 * 96, W - 64, 84);
-                    w.push(Widget {
-                        rect,
-                        kind: Kind::Row(i),
-                        action: None,
-                    });
-                }
-                // The look runs on the other console: offer to start again on it.
-                if m.restart.is_some() {
-                    for (k, (label, action)) in [
-                        ("Restart", Action::Restart),
-                        ("Not now", Action::KeepPlaying),
-                    ]
-                    .into_iter()
-                    .enumerate()
-                    {
-                        w.push(Widget {
-                            rect: Rect::new(W / 2 - 300 + k as i32 * 310, H - 120, 290, 72),
-                            kind: Kind::Tab {
-                                label: label.into(),
-                                on: k == 0,
-                            },
-                            action: Some(action),
-                        });
-                    }
-                }
-            }
-            Page::Options => {
-                for (i, (label, on)) in
-                    [("This game", m.for_game), (m.console.as_str(), !m.for_game)]
-                        .into_iter()
-                        .enumerate()
-                {
-                    let rect = Rect::new(W - 32 - 2 * 200 + i as i32 * 200, 12, 192, 64);
-                    let label = if i == 1 {
-                        format!("All {label}")
-                    } else {
-                        label.to_owned()
+                        Value::None
                     };
-                    w.push(Widget {
-                        rect,
-                        kind: Kind::Tab { label, on },
-                        action: None,
-                    });
+                    rows.push(row(restart, value, Does::Restart));
                 }
-                let rows: Vec<usize> = (0..m.options.len())
-                    .filter(|&i| {
-                        !matches!(
-                            m.options[i].key.as_str(),
-                            "lcd" | "palette" | "colors" | "look"
-                        )
-                    })
-                    .collect();
-                let mut y = HEADER + 16;
-                for i in rows {
-                    w.push(Widget {
-                        rect: Rect::new(32, y, W - 64, 72),
-                        kind: Kind::Row(i),
-                        action: None,
-                    });
-                    y += 80;
-                }
-                for (label, value) in [
-                    ("Top screen", m.top_brightness),
-                    ("Bottom screen", m.bottom_brightness),
-                    ("Volume", m.volume),
-                ] {
-                    if let Some(v) = value {
-                        w.push(Widget {
-                            rect: Rect::new(32, y, W - 64, 72),
-                            kind: Kind::Slider {
-                                label: label.into(),
-                                value: v,
-                            },
-                            action: None,
-                        });
-                        y += 80;
-                    }
-                }
+                rows.push(row("Save and quit", Value::None, Does::Quit));
+                (rows, m.title.to_uppercase())
             }
-        }
-        w
-    }
-
-    /// A finger came down at `(x, y)` (screen pixels). Returns the action it asks for.
-    pub fn tap(&mut self, m: &Model, x: i32, y: i32) -> Option<Action> {
-        let widgets = self.widgets(m);
-        let (i, w) = widgets
-            .iter()
-            .enumerate()
-            .find(|(_, w)| w.rect.contains(x, y))?;
-        self.focus = i;
-        self.dirty = true;
-        self.activate(m, w, Some((x, y)))
-    }
-
-    /// A finger moved to `(x, y)`: a slider under it follows; nothing else reacts.
-    pub fn drag(&mut self, m: &Model, x: i32, y: i32) -> Option<Action> {
-        let widgets = self.widgets(m);
-        let w = widgets
-            .iter()
-            .find(|w| w.rect.contains(x, y) && matches!(w.kind, Kind::Slider { .. }))?;
-        self.dirty = true;
-        self.activate(m, &w.clone(), Some((x, y)))
-    }
-
-    fn activate(&mut self, m: &Model, w: &Widget, at: Option<(i32, i32)>) -> Option<Action> {
-        match &w.kind {
-            Kind::Back => {
-                self.go(Page::Play);
-                None
-            }
-            Kind::Tile { label: "Load", .. } => {
-                self.states_saving = false;
-                self.go(Page::States);
-                None
-            }
-            Kind::Tile { label: "Save", .. } => {
-                self.states_saving = true;
-                self.go(Page::States);
-                None
-            }
-            // Saving over a state takes a second tap on the same slot.
-            Kind::Slot(n) if self.states_saving => {
-                let used = m.slots.get(*n).is_some_and(|s| s.picture.is_some());
-                if used && self.confirm != Some(*n) {
-                    self.confirm = Some(*n);
-                    return None;
-                }
-                self.confirm = None;
-                w.action.clone()
-            }
-            Kind::Tile { label: "Look", .. } => {
-                self.go(Page::Look);
-                None
-            }
-            Kind::Tile {
-                label: "Options", ..
-            } => {
-                self.go(Page::Options);
-                None
-            }
-            Kind::Tab { label, .. } if label == "Restart" || label == "Not now" => w.action.clone(),
-            Kind::Tab { label, .. } => {
-                if label == "Load" || label == "Save" {
-                    self.states_saving = label == "Save";
-                    self.confirm = None;
-                    self.dirty = true;
-                    None
+            Page::Game | Page::Console => {
+                let for_game = self.page == Page::Game;
+                let options = if for_game {
+                    &m.game_options
                 } else {
-                    // The game / console switch: the main loop keeps it in the model.
-                    Some(Action::Set {
-                        key: "@scope".into(),
-                        value: (label == "This game").into(),
-                        for_game: true,
-                    })
-                }
-            }
-            Kind::Row(i) => {
-                let row = &m.options[*i];
-                let dir = match at {
-                    Some((x, _)) if x < w.rect.x + w.rect.w / 2 => -1,
-                    _ => 1,
+                    &m.console_options
                 };
-                let n = row.values.len().max(1) as i32;
-                let next = if row.wraps {
-                    (row.at as i32 + dir).rem_euclid(n)
-                } else {
-                    (row.at as i32 + dir).clamp(0, n - 1)
-                } as usize;
-                if next == row.at {
-                    return None;
-                }
-                let key = row.key.clone();
-                let for_game = m.for_game;
-                Some(match row.values.get(next)?.0.clone() {
-                    Some(value) => Action::Set {
-                        key,
+                // The look's rows under LOOK, the rest under PLAY.
+                let group = |k: &str| match k {
+                    "look" | "palette" | "colors" | "lcd" => "LOOK",
+                    _ => "PLAY",
+                };
+                let mut rows = Vec::new();
+                let mut last = "";
+                for o in options {
+                    if group(&o.key) != last {
+                        last = group(&o.key);
+                        rows.push((Row::heading(last), Does::Nothing));
+                    }
+                    let value = match &o.here {
+                        Some(v) => Value::Text(v.clone()),
+                        None => Value::Inherited(o.inherit.clone()),
+                    };
+                    rows.push(row(
+                        &o.label,
                         value,
-                        for_game,
-                    },
-                    None => Action::Unset { key, for_game },
-                })
-            }
-            Kind::Slider { label, value } => {
-                let percent = match at {
-                    Some((x, _)) => {
-                        let track = Self::slider_track(w.rect);
-                        (((x - track.x) * 100) / track.w).clamp(0, 100) as u8
-                    }
-                    None => value.saturating_add(10).min(100),
+                        Does::Option {
+                            key: o.key.clone(),
+                            for_game,
+                        },
+                    ));
+                }
+                let title = if for_game {
+                    m.title.to_uppercase()
+                } else {
+                    format!("EVERY {} GAME", m.console)
                 };
-                Some(match label.as_str() {
-                    "Top screen" => Action::Brightness { top: true, percent },
-                    "Bottom screen" => Action::Brightness {
-                        top: false,
-                        percent,
-                    },
-                    _ => Action::Volume(percent),
-                })
+                (rows, title)
             }
-            _ => w.action.clone(),
+            Page::System => {
+                let mut rows = Vec::new();
+                if let Some(p) = m.top_brightness {
+                    rows.push(row(
+                        "Top screen",
+                        Value::Slider(p),
+                        Does::Brightness { top: true },
+                    ));
+                }
+                if let Some(p) = m.bottom_brightness {
+                    rows.push(row(
+                        "Bottom screen",
+                        Value::Slider(p),
+                        Does::Brightness { top: false },
+                    ));
+                }
+                if let Some(v) = m.volume {
+                    rows.push(row("Volume", Value::Slider(v), Does::Volume));
+                }
+                let clock = if m.hour12 { "12-hour" } else { "24-hour" };
+                rows.push(row("Clock", Value::Text(clock.into()), Does::Clock));
+                (rows, "NIBOS".into())
+            }
+            Page::States => (Vec::new(), String::new()),
         }
     }
 
-    /// The D-pad and A/B while the menu is open.
-    pub fn nav(&mut self, m: &Model, key: Nav) -> Option<Action> {
-        let widgets = self.widgets(m);
-        if widgets.is_empty() {
+    /// The page as nibkit's menu, with what each row does.
+    fn page(&self, m: &Model) -> (Menu, Vec<Does>) {
+        let (rows, title) = self.rows(m);
+        let (row, scroll) = self.rows[Self::index(self.page)];
+        let (rows, does): (Vec<Row>, Vec<Does>) = rows.into_iter().unzip();
+        let mut menu = Menu {
+            tabs: self.tabs(m),
+            title,
+            row: row.min(rows.len().saturating_sub(1)),
+            scroll,
+            rows,
+            hint: String::new(),
+        };
+        menu.settle();
+        menu.hint = self.hint(m, &menu, &does);
+        (menu, does)
+    }
+
+    fn shelf(&self, m: &Model) -> Shelf {
+        let cards = (0..7)
+            .map(|at| {
+                let slot = slot_at(at);
+                let info = m.slots.get(slot);
+                let label = match (slot, info.filter(|i| i.picture.is_some())) {
+                    (0, _) => "Resume point".to_owned(),
+                    (n, Some(i)) => format!("{n} \u{b7} {}", i.made),
+                    (n, None) => format!("{n}"),
+                };
+                Card {
+                    picture: info.and_then(|i| i.picture.as_ref()).map(|_| slot),
+                    label,
+                }
+            })
+            .collect();
+        let hint = match self.confirm {
+            Some(Confirm::SaveOver(n)) => format!("X  again to save over slot {n}   \u{b7}   B  resume"),
+            _ => "A  load   \u{b7}   X  save here   \u{b7}   D-pad  browse   \u{b7}   L / R  page   \u{b7}   B  resume".into(),
+        };
+        Shelf {
+            tabs: self.tabs(m),
+            cards,
+            at: self.card,
+            hint,
+        }
+    }
+
+    fn hint(&self, _m: &Model, menu: &Menu, does: &[Does]) -> String {
+        let sep = "   \u{b7}   ";
+        match self.page {
+            Page::Play => format!("A  choose{sep}D-pad  move{sep}L / R  page{sep}B  resume"),
+            Page::System => format!("D-pad  change{sep}L / R  page{sep}B  resume"),
+            _ => {
+                let set_here = matches!(
+                    menu.rows.get(menu.row).map(|r| &r.value),
+                    Some(Value::Text(_))
+                );
+                let opts = if self.page == Page::Game {
+                    &_m.game_options
+                } else {
+                    &_m.console_options
+                };
+                let use_hint = match does.get(menu.row) {
+                    Some(Does::Option { key, .. }) if set_here => opts
+                        .iter()
+                        .find(|o| &o.key == key)
+                        .map(|o| format!("Y  {}{sep}", o.use_hint)),
+                    _ => None,
+                };
+                format!(
+                    "D-pad  change{sep}{}L / R  page{sep}B  resume",
+                    use_hint.unwrap_or_default()
+                )
+            }
+        }
+    }
+
+    fn status(m: &Model) -> Status {
+        Status {
+            clock: m.clock.clone(),
+            battery: m.battery.map(|b| (b, false)),
+            slot: Slot::Two(420.0),
+        }
+    }
+
+    /// The bottom screen's picture, when it has changed since last asked: blank in play.
+    pub fn render(&mut self, m: &Model) -> Option<&[u8]> {
+        if !std::mem::take(&mut self.dirty) {
             return None;
         }
-        self.focus = self.focus.min(widgets.len() - 1);
-        self.dirty = true;
-        let here = widgets[self.focus].rect.centre();
-        let pick = |dx: i32, dy: i32| {
-            widgets
-                .iter()
-                .enumerate()
-                .filter(|(i, w)| {
-                    let (x, y) = w.rect.centre();
-                    *i != self.focus && (x - here.0) * dx + (y - here.1) * dy > 0
-                })
-                .min_by_key(|(_, w)| {
-                    let (x, y) = w.rect.centre();
-                    let along = (x - here.0) * dx + (y - here.1) * dy;
-                    let across = ((x - here.0) * dy).abs() + ((y - here.1) * dx).abs();
-                    along + 3 * across
-                })
-                .map(|(i, _)| i)
-        };
-        match key {
-            Nav::Up | Nav::Down | Nav::Left | Nav::Right => {
-                // On a row or slider, left and right change it.
-                let w = &widgets[self.focus];
-                if matches!(key, Nav::Left | Nav::Right)
-                    && matches!(w.kind, Kind::Row(_) | Kind::Slider { .. })
-                {
-                    let x = if key == Nav::Left {
-                        w.rect.x + 1
-                    } else {
-                        w.rect.x + w.rect.w - 1
-                    };
-                    if let Kind::Slider { value, .. } = w.kind {
-                        let step = if key == Nav::Left {
-                            value.saturating_sub(5)
-                        } else {
-                            value.saturating_add(5).min(100)
-                        };
-                        let track = Self::slider_track(w.rect);
-                        let x = track.x + track.w * step as i32 / 100;
-                        return self.activate(m, &w.clone(), Some((x, 0)));
-                    }
-                    return self.activate(m, &w.clone(), Some((x, 0)));
-                }
-                let (dx, dy) = match key {
-                    Nav::Up => (0, -1),
-                    Nav::Down => (0, 1),
-                    Nav::Left => (-1, 0),
-                    _ => (1, 0),
+        self.bottom.clear(colour::BLACK);
+        if self.menu {
+            let mut draws = match self.page {
+                Page::States => layout::shelf(&self.shelf(m), &Self::status(m)),
+                _ => layout::menu(&self.page(m).0, &Self::status(m)),
+            };
+            if let Some(t) = &m.toast {
+                draws.push(Draw::Text {
+                    text: t.clone(),
+                    size: 24.0,
+                    bold: true,
+                    x: menu::W / 2.0,
+                    y: 596.0,
+                    anchor: 0.5,
+                    colour: colour::WHITE,
+                });
+            }
+            let pictures: Vec<Option<&[u8]>> =
+                m.slots.iter().map(|s| s.picture.as_deref()).collect();
+            self.bottom.draw(&self.fonts, &draws, |i| {
+                pictures.get(i).copied().flatten().map(|p| (p, 160, 144))
+            });
+        }
+        Some(&self.bottom.px)
+    }
+
+    /// What goes over the game on the top screen, when it has changed since last asked:
+    /// `Some(Some(px))`, premultiplied RGBA, the game dimmed with "Paused" or a save state's
+    /// picture and details; `Some(None)` to show the game as it is (in play, and on the look's
+    /// rows, so a change shows); `None` when nothing changed.
+    pub fn render_top(&mut self, m: &Model) -> Option<Option<&[u8]>> {
+        if !std::mem::take(&mut self.top_dirty) {
+            return None;
+        }
+        Some(self.overlay(m))
+    }
+
+    fn overlay(&mut self, m: &Model) -> Option<&[u8]> {
+        if !self.menu {
+            return None;
+        }
+        // On the look's rows the game shows as it is, so a change shows.
+        let look_row = match (self.page, self.focused(m)) {
+            (Page::Game | Page::Console, Does::Option { key, for_game }) => {
+                let opts = if for_game {
+                    &m.game_options
+                } else {
+                    &m.console_options
                 };
-                if let Some(i) = pick(dx, dy) {
-                    self.focus = i;
+                opts.iter().any(|o| o.key == key && o.shows)
+            }
+            _ => false,
+        };
+        let f = &self.fonts;
+        let c = &mut self.top;
+        c.clear(colour::BLACK);
+        let text =
+            |c: &mut Canvas, s: &str, size: (f32, bool), at: (f32, f32), anchor: f32, ink| {
+                c.text(f, s, size, at, anchor, ink)
+            };
+        if self.page == Page::States {
+            let slot = slot_at(self.card);
+            let info = m.slots.get(slot).cloned().unwrap_or_default();
+            let name = if slot == 0 {
+                "Resume point".to_owned()
+            } else {
+                format!("Slot {slot}")
+            };
+            match &info.picture {
+                Some(p) => c.draw(
+                    f,
+                    &[Draw::Picture {
+                        index: 0,
+                        x: 62.0,
+                        y: 104.0,
+                        w: 560.0,
+                        h: 504.0,
+                        faded: false,
+                    }],
+                    |_| Some((&p[..], 160, 144)),
+                ),
+                None => c.draw(
+                    f,
+                    &[Draw::Rect {
+                        x: 62.0,
+                        y: 104.0,
+                        w: 560.0,
+                        h: 504.0,
+                        colour: [21, 24, 30],
+                    }],
+                    |_| None,
+                ),
+            }
+            text(c, &name, (60.0, true), (660.0, 170.0), 0.0, colour::WHITE);
+            if slot != 0 && slot == m.quick_slot {
+                text(
+                    c,
+                    "Quick slot",
+                    (30.0, false),
+                    (660.0, 246.0),
+                    0.0,
+                    colour::DIM,
+                );
+            }
+            if info.picture.is_some() {
+                let played = info.played.trim_end_matches(" played");
+                for (k, (label, value)) in [("Saved", info.made.as_str()), ("Played", played)]
+                    .iter()
+                    .enumerate()
+                {
+                    let y = 340.0 + k as f32 * 40.0;
+                    text(c, label, (26.0, false), (660.0, y), 0.0, colour::DIM);
+                    text(c, value, (26.0, true), (780.0, y), 0.0, colour::WHITE);
                 }
+            } else {
+                text(c, "Empty", (26.0, false), (660.0, 340.0), 0.0, colour::DIM);
+            }
+            return Some(&c.px);
+        }
+        if look_row {
+            return None;
+        }
+        // The game dimmed, its name and today's play time over it.
+        text(
+            c,
+            "Paused",
+            (64.0, true),
+            (512.0, 300.0),
+            0.5,
+            colour::WHITE,
+        );
+        let sub = if m.played.is_empty() {
+            m.title.clone()
+        } else {
+            format!("{} \u{b7} {}", m.title, m.played)
+        };
+        text(c, &sub, (30.0, false), (512.0, 384.0), 0.5, colour::DIM);
+        // Black behind is a dim (alpha 55%); text keeps its own colour.
+        for p in c.px.chunks_exact_mut(4) {
+            p[3] = p[0].max(p[1]).max(p[2]).max(140);
+        }
+        Some(&c.px)
+    }
+
+    /// What the highlighted row does.
+    fn focused(&self, m: &Model) -> Does {
+        let (menu, does) = self.page(m);
+        does.get(menu.row).cloned().unwrap_or(Does::Nothing)
+    }
+
+    fn keep(&mut self, menu: &Menu) {
+        self.rows[Self::index(self.page)] = (menu.row, menu.scroll);
+    }
+
+    /// A button, with the menu open.
+    pub fn nav(&mut self, m: &Model, nav: Nav) -> Option<Action> {
+        self.touch_up();
+        let key = match nav {
+            Nav::Up => Key::Up,
+            Nav::Down => Key::Down,
+            Nav::Left => Key::Left,
+            Nav::Right => Key::Right,
+            Nav::A => Key::A,
+            Nav::B => Key::B,
+            Nav::X => Key::X,
+            Nav::Y => Key::Y,
+            Nav::L => Key::L,
+            Nav::R => Key::R,
+        };
+        if self.page == Page::States {
+            let mut shelf = self.shelf(m);
+            let effect = shelf.key(key);
+            if shelf.at != self.card {
+                self.card = shelf.at;
+                self.confirm = None;
+            }
+            return self.effect(m, effect, &[]);
+        }
+        let (mut menu, does) = self.page(m);
+        let before = menu.row;
+        let effect = menu.key(key);
+        if menu.row != before {
+            self.confirm = None;
+        }
+        self.keep(&menu);
+        self.effect(m, effect, &does)
+    }
+
+    /// A finger down on the bottom screen (screen pixels).
+    pub fn tap(&mut self, m: &Model, x: i32, y: i32) -> Option<Action> {
+        self.touch_up();
+        if !self.menu {
+            return Some(Action::OpenMenu);
+        }
+        let (x, y) = (x as f32, y as f32);
+        if self.page == Page::States {
+            let mut shelf = self.shelf(m);
+            let effect = shelf.touch(x, y);
+            if shelf.at != self.card {
+                self.card = shelf.at;
+                self.confirm = None;
+            }
+            return self.effect(m, effect, &[]);
+        }
+        let (mut menu, does) = self.page(m);
+        // A slider follows the finger along its bar.
+        if let Some(a) = self.slide(&menu, &does, x, y) {
+            return Some(a);
+        }
+        let effect = menu.touch(x, y);
+        self.keep(&menu);
+        self.effect(m, effect, &does)
+    }
+
+    /// A finger moving: a slider under it follows.
+    pub fn drag(&mut self, m: &Model, x: i32, y: i32) -> Option<Action> {
+        if !self.menu || self.page != Page::System {
+            return None;
+        }
+        let (menu, does) = self.page(m);
+        self.dirty = true;
+        self.slide(&menu, &does, x as f32, y as f32)
+    }
+
+    fn slide(&self, menu: &Menu, does: &[Does], x: f32, y: f32) -> Option<Action> {
+        let i = menu.scroll + layout::row_hit(y)?;
+        let Value::Slider(_) = menu.rows.get(i)?.value else {
+            return None;
+        };
+        let (bar, gap) = (180.0, 76.0);
+        let x0 = layout::RIGHT - gap - bar;
+        if !(x0 - 20.0..x0 + bar + 20.0).contains(&x) {
+            return None;
+        }
+        let percent = (((x - x0) / bar) * 100.0).clamp(0.0, 100.0) as u8;
+        match does.get(i)? {
+            Does::Brightness { top } => Some(Action::Brightness { top: *top, percent }),
+            Does::Volume => Some(Action::Volume(percent)),
+            _ => None,
+        }
+    }
+
+    fn option<'m>(m: &'m Model, key: &str, for_game: bool) -> Option<&'m OptionRow> {
+        let opts = if for_game {
+            &m.game_options
+        } else {
+            &m.console_options
+        };
+        opts.iter().find(|o| o.key == key)
+    }
+
+    /// Carries out what a button or touch said.
+    fn effect(&mut self, m: &Model, effect: Option<Effect>, does: &[Does]) -> Option<Action> {
+        match effect? {
+            Effect::Page(i) => {
+                self.go(PAGES[i]);
                 None
             }
-            Nav::A => {
-                let w = widgets[self.focus].clone();
-                self.activate(m, &w, None)
+            Effect::Back => Some(Action::Resume),
+            Effect::Card { at, key } => {
+                let slot = slot_at(at);
+                let used = m.slots.get(slot).is_some_and(|s| s.picture.is_some());
+                match key {
+                    Key::A if used => Some(Action::Load(slot)),
+                    Key::X if slot != 0 => {
+                        if used && self.confirm != Some(Confirm::SaveOver(slot)) {
+                            self.confirm = Some(Confirm::SaveOver(slot));
+                            return None;
+                        }
+                        self.confirm = None;
+                        Some(Action::Save(slot))
+                    }
+                    _ => None,
+                }
             }
-            // Y: back to the level above, on a row (or the look) set at this level.
-            Nav::Y => match widgets[self.focus].kind {
-                Kind::Row(i) if !m.options[i].inherited => Some(Action::Unset {
-                    key: m.options[i].key.clone(),
-                    for_game: m.for_game,
-                }),
-                Kind::Look(_) if !m.look.is_empty() => Some(Action::Unset {
-                    key: "look".into(),
-                    for_game: m.for_game,
+            Effect::Use(row) => match does.get(row)? {
+                Does::Option { key, for_game } => Some(Action::Unset {
+                    key: key.clone(),
+                    for_game: *for_game,
                 }),
                 _ => None,
             },
-            Nav::B => {
-                if self.page == Page::Play {
-                    Some(Action::Resume)
-                } else {
-                    self.go(Page::Play);
+            Effect::Change { row, step } => self.change(m, does.get(row)?, step),
+            Effect::Choose(row) => match does.get(row)? {
+                Does::Resume => Some(Action::Resume),
+                Does::SaveState | Does::LoadState => {
+                    self.card = m.quick_slot.clamp(1, 6) - 1;
+                    self.go(Page::States);
                     None
                 }
-            }
-        }
-    }
-
-    fn slider_track(r: Rect) -> Rect {
-        Rect::new(r.x + 300, r.y + r.h / 2 - 6, r.w - 300 - 120, 12)
-    }
-
-    /// The picture, when it has changed since last asked.
-    pub fn render(&mut self, m: &Model) -> Option<&[u8]> {
-        if !self.dirty {
-            return None;
-        }
-        self.dirty = false;
-        let widgets = self.widgets(m);
-        let c = &mut self.canvas;
-        c.clear(colour::BACKGROUND);
-        // The header: the page's title or the game's, the time and the battery.
-        let title = match self.page {
-            Page::Play => m.title.clone(),
-            Page::States if self.states_saving => "Save to a slot".into(),
-            Page::States => "Load a slot".into(),
-            Page::Look => "Look".into(),
-            Page::Options => "Options".into(),
-        };
-        let title_x = if self.page == Page::Play { 32 } else { 190 };
-        let title_w = if self.page == Page::Play {
-            W - 32 - 240
-        } else {
-            380
-        };
-        c.text(
-            Rect::new(title_x, 12, title_w, 64),
-            &title,
-            TITLE,
-            colour::TEXT,
-            Align::Left,
-        );
-        if self.page == Page::Play {
-            let battery = m.battery.map(|b| format!("  {b}%")).unwrap_or_default();
-            c.text(
-                Rect::new(W - 32 - 220, 12, 220, 64),
-                &format!("{}{battery}", m.clock),
-                BODY,
-                colour::DIM,
-                Align::Right,
-            );
-        }
-        c.fill(Rect::new(0, HEADER, W, 2), colour::LINE);
-        for (i, w) in widgets.iter().enumerate() {
-            let focused = self.menu && i == self.focus;
-            draw_widget(c, m, w, focused);
-            if matches!(w.kind, Kind::Slot(n) if self.confirm == Some(n)) {
-                let r = Rect::new(w.rect.x, w.rect.y + w.rect.h - 64 - 72, w.rect.w, 72);
-                c.round(r, 12, colour::INK);
-                c.text(
-                    r,
-                    "Tap again to replace",
-                    BODY,
-                    colour::INK_DARK,
-                    Align::Centre,
-                );
-            }
-        }
-        if let Some(t) = &m.toast {
-            let r = Rect::new(W / 2 - 260, H - 104, 520, 76);
-            c.round(r, 38, colour::INK);
-            c.text(r, t, LABEL, colour::INK_DARK, Align::Centre);
-        }
-        if self.menu && self.page == Page::Play {
-            c.text(
-                Rect::new(32, H - 40, W - 64, 32),
-                "Paused · B or Back to play",
-                SMALL,
-                colour::DIM,
-                Align::Centre,
-            );
-        }
-        if let (Page::Look, Some(q)) = (self.page, &m.restart) {
-            c.text(
-                Rect::new(32, H - 176, W - 64, 44),
-                q,
-                BODY,
-                colour::TEXT,
-                Align::Centre,
-            );
-        }
-        // On a row set at this level, what Y does.
-        let hint = match widgets.get(self.focus).map(|w| &w.kind) {
-            Some(Kind::Row(i)) if !m.options[*i].inherited => Some(&m.options[*i].use_hint),
-            Some(Kind::Look(_)) if !m.look.is_empty() => Some(&m.look_use),
-            _ => None,
-        };
-        if let (true, Some(hint)) = (self.menu, hint) {
-            c.text(
-                Rect::new(32, H - 40, W - 64, 32),
-                &format!("Y {hint}"),
-                SMALL,
-                colour::DIM,
-                Align::Centre,
-            );
-        }
-        Some(&self.canvas.px)
-    }
-}
-
-/// The D-pad and the A and B buttons, as the menu uses them.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Nav {
-    Up,
-    Down,
-    Left,
-    Right,
-    A,
-    B,
-    Y,
-}
-
-fn draw_widget(c: &mut Canvas, m: &Model, w: &Widget, focused: bool) {
-    let r = w.rect;
-    match &w.kind {
-        Kind::Back => {
-            c.round(r, 32, colour::PANEL_LIT);
-            c.triangle(
-                [
-                    (r.x as f32 + 34.0, r.y as f32 + 32.0),
-                    (r.x as f32 + 52.0, r.y as f32 + 18.0),
-                    (r.x as f32 + 52.0, r.y as f32 + 46.0),
-                ],
-                colour::TEXT,
-            );
-            c.text(
-                Rect::new(r.x + 60, r.y, r.w - 70, r.h),
-                "Back",
-                LABEL,
-                colour::TEXT,
-                Align::Left,
-            );
-        }
-        Kind::Tab { label, on } => {
-            c.round(r, 32, if *on { colour::INK } else { colour::PANEL });
-            c.text(
-                r,
-                label,
-                BODY,
-                if *on { colour::INK_DARK } else { colour::TEXT },
-                Align::Centre,
-            );
-        }
-        Kind::Tile { label, sub, icon } => {
-            c.round(r, 28, colour::PANEL);
-            draw_icon(c, *icon, (r.x + r.w / 2) as f32, (r.y + 112) as f32, m.fast);
-            c.text(
-                Rect::new(r.x, r.y + r.h - 108, r.w, 48),
-                label,
-                LABEL,
-                colour::TEXT,
-                Align::Centre,
-            );
-            c.text(
-                Rect::new(r.x + 12, r.y + r.h - 62, r.w - 24, 40),
-                sub,
-                SMALL,
-                colour::DIM,
-                Align::Centre,
-            );
-        }
-        Kind::Slot(n) => {
-            let info = m.slots.get(*n).cloned().unwrap_or_default();
-            let pic = Rect::new(r.x, r.y, r.w, r.h - 64);
-            c.round(
-                pic.inset(-4),
-                12,
-                if *n == m.quick_slot {
-                    colour::INK
-                } else {
-                    colour::PANEL
-                },
-            );
-            match &info.picture {
-                Some(p) => c.picture_fit(pic, p, 160, 144),
-                None => {
-                    c.fill(pic, colour::PANEL);
-                    c.text(pic, "Empty", BODY, colour::DIM, Align::Centre);
+                Does::Restart => {
+                    if self.confirm == Some(Confirm::Restart) {
+                        self.confirm = None;
+                        Some(Action::Restart)
+                    } else {
+                        self.confirm = Some(Confirm::Restart);
+                        None
+                    }
                 }
-            }
-            let label = if info.made.is_empty() {
-                format!("Slot {n}")
-            } else {
-                format!("{n} · {}", info.made)
-            };
-            c.text(
-                Rect::new(r.x, r.y + r.h - 60, r.w, 32),
-                &label,
-                BODY,
-                colour::TEXT,
-                Align::Left,
-            );
-            c.text(
-                Rect::new(r.x, r.y + r.h - 30, r.w, 28),
-                &info.played,
-                SMALL,
-                colour::DIM,
-                Align::Left,
-            );
-        }
-        Kind::Look(i) => {
-            let look = &m.looks[*i];
-            let on = look.value == m.look;
-            c.round(r, 24, if on { colour::INK } else { colour::PANEL });
-            let inner = Rect::new(r.x + 16, r.y + 16, r.w - 32, 150);
-            for (k, s) in look.swatch.iter().enumerate() {
-                let sw = inner.w / 4;
-                c.fill(Rect::new(inner.x + k as i32 * sw, inner.y, sw, inner.h), *s);
-            }
-            c.text(
-                Rect::new(r.x + 8, r.y + 176, r.w - 16, 72),
-                &look.label,
-                BODY,
-                if on { colour::INK_DARK } else { colour::TEXT },
-                Align::Centre,
-            );
-        }
-        Kind::Row(i) => {
-            let row = &m.options[*i];
-            c.round(r, 20, colour::PANEL);
-            c.text(
-                Rect::new(r.x + 24, r.y, 420, r.h),
-                &row.label,
-                BODY,
-                colour::TEXT,
-                Align::Left,
-            );
-            // Set here: the value, bright. Not set here: where it comes from, muted.
-            let (t, colour) = if row.inherited {
-                (BODY, colour::DIM)
-            } else {
-                (LABEL, colour::INK)
-            };
-            c.text(
-                Rect::new(r.x + 420, r.y, r.w - 440, r.h),
-                &format!("‹  {}  ›", row.shown),
-                t,
-                colour,
-                Align::Centre,
-            );
-        }
-        Kind::Slider { label, value } => {
-            c.round(r, 20, colour::PANEL);
-            c.text(
-                Rect::new(r.x + 24, r.y, 260, r.h),
-                label,
-                BODY,
-                colour::TEXT,
-                Align::Left,
-            );
-            let t = Ui::slider_track(r);
-            c.round(t, 6, colour::LINE);
-            c.round(
-                Rect::new(t.x, t.y, t.w * *value as i32 / 100, t.h),
-                6,
-                colour::INK,
-            );
-            c.disc(
-                (t.x + t.w * *value as i32 / 100) as f32,
-                (t.y + t.h / 2) as f32,
-                18.0,
-                colour::TEXT,
-            );
-            c.text(
-                Rect::new(r.x + r.w - 110, r.y, 90, r.h),
-                &format!("{value}%"),
-                BODY,
-                colour::DIM,
-                Align::Right,
-            );
+                Does::Quit => Some(Action::Quit),
+                other => {
+                    let other = other.clone();
+                    self.change(m, &other, 1)
+                }
+            },
         }
     }
-    if focused {
-        c.ring(r.inset(-6), 30, 4, colour::INK);
-    }
-}
 
-fn draw_icon(c: &mut Canvas, icon: Icon, x: f32, y: f32, fast: bool) {
-    let t = colour::TEXT;
-    let ink = colour::INK;
-    match icon {
-        Icon::Save | Icon::Load => {
-            // A tray, with an arrow into it (save) or out of it (load).
-            c.round(Rect::new(x as i32 - 56, y as i32 + 22, 112, 14), 7, t);
-            c.round(Rect::new(x as i32 - 56, y as i32 - 4, 14, 40), 7, t);
-            c.round(Rect::new(x as i32 + 42, y as i32 - 4, 14, 40), 7, t);
-            if matches!(icon, Icon::Save) {
-                c.fill(Rect::new(x as i32 - 7, y as i32 - 58, 14, 36), ink);
-                c.triangle(
-                    [(x - 28.0, y - 24.0), (x + 28.0, y - 24.0), (x, y + 8.0)],
-                    ink,
-                );
-            } else {
-                c.fill(Rect::new(x as i32 - 7, y as i32 - 30, 14, 40), ink);
-                c.triangle(
-                    [(x - 28.0, y - 28.0), (x + 28.0, y - 28.0), (x, y - 60.0)],
-                    ink,
-                );
+    fn change(&mut self, m: &Model, does: &Does, step: i32) -> Option<Action> {
+        match does {
+            Does::Fast => Some(Action::ToggleFast),
+            Does::Clock => Some(Action::Clock(!m.hour12)),
+            Does::Brightness { top } => {
+                let now = if *top {
+                    m.top_brightness
+                } else {
+                    m.bottom_brightness
+                }?;
+                let percent = (now as i32 + 5 * step).clamp(0, 100) as u8;
+                Some(Action::Brightness { top: *top, percent })
             }
-        }
-        Icon::Look => {
-            c.disc(x, y, 50.0, t);
-            c.disc(x, y, 42.0, colour::PANEL);
-            for (k, col) in [
-                [0x9b, 0xbc, 0x0f],
-                [0x30, 0x62, 0x30],
-                [0xe0, 0x5a, 0x3a],
-                [0x4a, 0x7a, 0xe0],
-            ]
-            .iter()
-            .enumerate()
-            {
-                let a = k as f32 * std::f32::consts::FRAC_PI_2 + 0.6;
-                c.disc(x + a.cos() * 22.0, y + a.sin() * 22.0, 13.0, *col);
+            Does::Volume => {
+                let percent = (m.volume? as i32 + 5 * step).clamp(0, 100) as u8;
+                Some(Action::Volume(percent))
             }
-        }
-        Icon::Fast => {
-            let col = if fast { ink } else { t };
-            c.triangle(
-                [(x - 54.0, y - 36.0), (x - 54.0, y + 36.0), (x - 4.0, y)],
-                col,
-            );
-            c.triangle(
-                [(x + 2.0, y - 36.0), (x + 2.0, y + 36.0), (x + 52.0, y)],
-                col,
-            );
-        }
-        Icon::Options => {
-            for k in 0..3 {
-                let yy = y - 34.0 + k as f32 * 34.0;
-                c.round(Rect::new(x as i32 - 56, yy as i32 - 4, 112, 8), 4, t);
-                c.disc(x - 30.0 + k as f32 * 28.0, yy, 13.0, ink);
+            Does::Option { key, for_game } => {
+                let o = Self::option(m, key, *for_game)?;
+                let n = o.values.len().max(1) as i32;
+                let next = if o.wraps {
+                    (o.at as i32 + step).rem_euclid(n)
+                } else {
+                    (o.at as i32 + step).clamp(0, n - 1)
+                } as usize;
+                if next == o.at {
+                    return None;
+                }
+                Some(match o.values.get(next)?.clone() {
+                    Some(value) => Action::Set {
+                        key: key.clone(),
+                        value,
+                        for_game: *for_game,
+                    },
+                    None => Action::Unset {
+                        key: key.clone(),
+                        for_game: *for_game,
+                    },
+                })
             }
-        }
-        Icon::Quit => {
-            c.disc(x, y, 46.0, t);
-            c.disc(x, y, 37.0, colour::PANEL);
-            c.fill(
-                Rect::new(x as i32 - 14, y as i32 - 60, 28, 40),
-                colour::PANEL,
-            );
-            c.round(Rect::new(x as i32 - 6, y as i32 - 56, 12, 50), 6, ink);
+            _ => None,
         }
     }
 }
@@ -996,126 +804,185 @@ fn draw_icon(c: &mut Canvas, icon: Icon, x: f32, y: f32, fast: bool) {
 mod tests {
     use super::*;
 
+    fn option(key: &str, here: Option<&str>) -> OptionRow {
+        OptionRow {
+            key: key.into(),
+            label: key.into(),
+            here: here.map(str::to_owned),
+            inherit: "Use default (Smooth)".into(),
+            values: vec![None, Some("panel".into()), Some("exact".into())],
+            at: if here.is_some() { 1 } else { 0 },
+            wraps: true,
+            use_hint: "use GB".into(),
+            shows: key == "look",
+        }
+    }
+
     fn model() -> Model {
+        let mut slots = vec![SlotInfo::default(); 7];
+        slots[2].picture = Some(vec![0; 160 * 144 * 4]);
+        slots[2].made = "Today 4:41 PM".into();
         Model {
-            title: "TEST".into(),
-            slots: vec![SlotInfo::default(); 7],
-            quick_slot: 1,
+            title: "Tetris".into(),
             console: "GB".into(),
-            for_game: true,
-            options: vec![OptionRow {
-                key: "speed".into(),
-                label: "Timing".into(),
-                shown: "Use default (Smooth)".into(),
-                inherited: true,
-                values: vec![
-                    (None, "Use default (Smooth)".into()),
-                    (Some("panel".into()), "Smooth".into()),
-                    (Some("exact".into()), "Exact".into()),
-                ],
-                at: 0,
-                wraps: true,
-                use_hint: "use default".into(),
-            }],
+            slots,
+            quick_slot: 2,
+            game_options: vec![option("look", None), option("speed", Some("Smooth"))],
+            console_options: vec![option("look", None), option("speed", None)],
+            hour12: true,
             ..Model::default()
         }
     }
 
-    /// Save opens the six slots to choose from; an empty one saves at once, a used one only on
-    /// a second tap.
     #[test]
-    fn save_picks_a_slot_and_asks_before_replacing() {
-        let mut ui = Ui::new();
-        let mut m = model();
-        m.slots[2].picture = Some(vec![0; 160 * 144 * 4]);
-        // The first tile, top left, is Save.
-        assert_eq!(ui.tap(&m, 100, 200), None);
-        assert_eq!((ui.page, ui.states_saving), (Page::States, true));
-        // Slot 1 (top left) is empty: saved at once.
-        assert_eq!(ui.tap(&m, 150, 200), Some(Action::Save(1)));
-        // Slot 2 holds a state: the first tap asks, the second saves.
-        assert_eq!(ui.tap(&m, 500, 200), None);
-        assert_eq!(ui.confirm, Some(2));
-        assert!(ui.render(&m).is_some());
-        assert_eq!(ui.tap(&m, 500, 200), Some(Action::Save(2)));
-        // A tap elsewhere in between starts the asking again.
-        ui.tap(&m, 500, 200);
-        ui.tap(&m, 150, 200);
-        assert_eq!(ui.tap(&m, 500, 200), None);
-    }
-
-    #[test]
-    fn the_play_tiles_do_what_they_say() {
+    fn the_bottom_screen_is_blank_in_play_and_a_tap_opens_the_menu() {
         let mut ui = Ui::new();
         let m = model();
-        // Quit is bottom right.
-        assert_eq!(ui.tap(&m, 900, 600), Some(Action::Quit));
-        // Options opens its page.
-        assert_eq!(ui.tap(&m, 512, 600), None);
-        assert_eq!(ui.page, Page::Options);
-    }
-
-    /// A row starts at "Use …" and steps through the values both ways, round to "Use …" again,
-    /// which clears the option at this level; Y does that too, on a row set here.
-    #[test]
-    fn a_row_steps_its_value_both_ways() {
-        let mut ui = Ui::new();
-        ui.go(Page::Options);
-        let mut m = model();
-        let set = |v: &str| {
-            Some(Action::Set {
-                key: "speed".into(),
-                value: v.into(),
-                for_game: true,
-            })
-        };
-        let unset = Some(Action::Unset {
-            key: "speed".into(),
-            for_game: true,
-        });
-        assert_eq!(ui.tap(&m, 900, HEADER + 40), set("panel"));
+        let px = ui.render(&m).unwrap();
+        assert!(px.chunks(4).all(|p| p[..3] == [0, 0, 0]));
+        assert_eq!(ui.tap(&m, 500, 400), Some(Action::OpenMenu));
         assert_eq!(
-            ui.tap(&m, 100, HEADER + 40),
-            set("exact"),
-            "round the other way"
+            ui.render_top(&m),
+            Some(None),
+            "nothing over the game in play"
         );
-        // The taps left the focus on the row. Inheriting, Y does nothing; set here, Y and
-        // stepping back to "Use …" clear it.
         ui.open_menu();
-        ui.go(Page::Options);
-        ui.tap(&m, 900, HEADER + 40);
-        assert_eq!(ui.nav(&m, Nav::Y), None);
-        m.options[0].at = 1;
-        m.options[0].inherited = false;
-        assert_eq!(ui.tap(&m, 100, HEADER + 40), unset);
-        assert_eq!(ui.nav(&m, Nav::Y), unset);
-        // A number stops at its ends.
-        m.options[0].wraps = false;
-        m.options[0].at = 2;
-        assert_eq!(ui.tap(&m, 900, HEADER + 40), None);
+        assert_eq!(ui.page, Page::Play);
+        assert!(ui
+            .render(&m)
+            .unwrap()
+            .chunks(4)
+            .any(|p| p[..3] != [0, 0, 0]));
+        assert!(
+            matches!(ui.render_top(&m), Some(Some(_))),
+            "Paused over the game"
+        );
+        assert_eq!(ui.render_top(&m), None, "drawn once");
     }
 
     #[test]
-    fn the_dpad_moves_between_tiles_and_b_resumes() {
+    fn play_resumes_saves_and_quits() {
         let mut ui = Ui::new();
-        ui.open_menu();
         let m = model();
-        ui.nav(&m, Nav::Right);
+        ui.open_menu();
+        assert_eq!(ui.nav(&m, Nav::A), Some(Action::Resume));
         ui.nav(&m, Nav::Down);
-        // Middle bottom: Options.
-        assert_eq!(ui.nav(&m, Nav::A), None);
-        assert_eq!(ui.page, Page::Options);
-        ui.nav(&m, Nav::B);
+        assert_eq!(ui.nav(&m, Nav::A), None, "Save state opens States");
+        assert_eq!(ui.page, Page::States);
+        assert_eq!(slot_at(ui.card), 2, "on the quick slot");
+        // Back on Play, the highlight is where it was (Save state).
+        ui.go(Page::Play);
+        for _ in 0..2 {
+            ui.nav(&m, Nav::Down);
+        }
+        assert_eq!(ui.nav(&m, Nav::Right), Some(Action::ToggleFast));
+        ui.nav(&m, Nav::Down);
+        assert_eq!(ui.nav(&m, Nav::A), Some(Action::Quit));
         assert_eq!(ui.nav(&m, Nav::B), Some(Action::Resume));
     }
 
     #[test]
-    fn it_draws_only_when_something_changed() {
+    fn states_load_and_save_asking_before_replacing() {
         let mut ui = Ui::new();
         let m = model();
-        assert!(ui.render(&m).is_some());
-        assert!(ui.render(&m).is_none());
-        ui.touch_up();
-        assert!(ui.render(&m).is_some());
+        ui.open_menu();
+        ui.go(Page::States);
+        // Slot 1, empty: nothing to load; saved at once.
+        assert_eq!(ui.nav(&m, Nav::A), None);
+        assert_eq!(ui.nav(&m, Nav::X), Some(Action::Save(1)));
+        ui.nav(&m, Nav::Right);
+        assert_eq!(ui.nav(&m, Nav::A), Some(Action::Load(2)));
+        assert_eq!(ui.nav(&m, Nav::X), None, "slot 2 holds a state: X again");
+        assert_eq!(ui.nav(&m, Nav::X), Some(Action::Save(2)));
+        assert!(
+            matches!(ui.render_top(&m), Some(Some(_))),
+            "its picture on the top screen"
+        );
+        // The resume point is last: it loads but takes no save.
+        for _ in 0..6 {
+            ui.nav(&m, Nav::Right);
+        }
+        assert_eq!(slot_at(ui.card), 0);
+        assert_eq!(ui.nav(&m, Nav::X), None);
+    }
+
+    #[test]
+    fn option_pages_step_inherit_and_use() {
+        let mut ui = Ui::new();
+        let m = model();
+        ui.open_menu();
+        ui.nav(&m, Nav::R);
+        ui.nav(&m, Nav::R);
+        assert_eq!(ui.page, Page::Game);
+        // On the look's row the game shows as it is (to see the change).
+        assert_eq!(ui.render_top(&m), Some(None));
+        assert_eq!(
+            ui.nav(&m, Nav::Right),
+            Some(Action::Set {
+                key: "look".into(),
+                value: "panel".into(),
+                for_game: true
+            })
+        );
+        assert_eq!(ui.nav(&m, Nav::Y), None, "inherited: nothing to clear");
+        ui.nav(&m, Nav::Down);
+        assert_eq!(
+            ui.nav(&m, Nav::Y),
+            Some(Action::Unset {
+                key: "speed".into(),
+                for_game: true
+            })
+        );
+        assert_eq!(
+            ui.nav(&m, Nav::Left),
+            Some(Action::Unset {
+                key: "speed".into(),
+                for_game: true
+            })
+        );
+        ui.nav(&m, Nav::R);
+        assert_eq!(ui.page, Page::Console);
+        assert_eq!(
+            ui.nav(&m, Nav::Right),
+            Some(Action::Set {
+                key: "look".into(),
+                value: "panel".into(),
+                for_game: false
+            })
+        );
+    }
+
+    #[test]
+    fn restarting_on_the_other_console_asks_first() {
+        let mut ui = Ui::new();
+        let mut m = model();
+        m.restart = Some("Restart as a Game Boy Color".into());
+        ui.open_menu();
+        for _ in 0..4 {
+            ui.nav(&m, Nav::Down);
+        }
+        assert_eq!(ui.nav(&m, Nav::A), None);
+        assert_eq!(ui.nav(&m, Nav::A), Some(Action::Restart));
+    }
+
+    #[test]
+    fn system_sliders_and_the_clock() {
+        let mut ui = Ui::new();
+        let mut m = model();
+        m.top_brightness = Some(60);
+        m.volume = Some(40);
+        ui.open_menu();
+        ui.go(Page::System);
+        assert_eq!(
+            ui.nav(&m, Nav::Right),
+            Some(Action::Brightness {
+                top: true,
+                percent: 65
+            })
+        );
+        ui.nav(&m, Nav::Down);
+        assert_eq!(ui.nav(&m, Nav::Left), Some(Action::Volume(35)));
+        ui.nav(&m, Nav::Down);
+        assert_eq!(ui.nav(&m, Nav::A), Some(Action::Clock(false)));
     }
 }

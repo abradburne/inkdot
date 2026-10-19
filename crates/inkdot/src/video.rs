@@ -102,6 +102,9 @@ pub struct Video {
     newest: usize,
     ui: glow::Texture,
     ui_ready: bool,
+    /// Over the game on the top screen while the menu is open (premultiplied RGBA), when shown.
+    overlay: glow::Texture,
+    overlay_on: bool,
     last_swap: std::time::Duration,
 }
 
@@ -303,6 +306,7 @@ impl Video {
             texture(&gl, 160, 144)?,
         ];
         let ui = texture(&gl, screens::WIDTH as i32, screens::HEIGHT as i32)?;
+        let overlay = texture(&gl, screens::WIDTH as i32, screens::HEIGHT as i32)?;
         Ok(Video {
             gl,
             _context: context,
@@ -317,6 +321,8 @@ impl Video {
             newest: 0,
             ui,
             ui_ready: false,
+            overlay,
+            overlay_on: false,
             last_swap: std::time::Duration::ZERO,
         })
     }
@@ -353,12 +359,26 @@ impl Video {
         }
     }
 
+    /// Puts a picture over the game on the top screen (1024×768, premultiplied RGBA), or
+    /// takes it away.
+    pub fn set_overlay(&mut self, rgba: Option<&[u8]>) {
+        self.overlay_on = rgba.is_some();
+        if let Some(rgba) = rgba {
+            self.upload(self.overlay, rgba);
+        }
+    }
+
     /// Uploads the bottom screen's picture (1024×768 RGBA).
     pub fn upload_ui(&mut self, rgba: &[u8]) {
+        self.upload(self.ui, rgba);
+        self.ui_ready = true;
+    }
+
+    fn upload(&self, texture: glow::Texture, rgba: &[u8]) {
         let gl = &self.gl;
         // SAFETY: as above; `rgba` is the full screen.
         unsafe {
-            gl.bind_texture(glow::TEXTURE_2D, Some(self.ui));
+            gl.bind_texture(glow::TEXTURE_2D, Some(texture));
             gl.tex_sub_image_2d(
                 glow::TEXTURE_2D,
                 0,
@@ -371,7 +391,6 @@ impl Video {
                 glow::PixelUnpackData::Slice(rgba),
             );
         }
-        self.ui_ready = true;
     }
 
     /// A rectangle in panel pixels as clip-space x, y, w, h.
@@ -453,6 +472,21 @@ impl Video {
             gl.uniform_1_f32(u("scale").as_ref(), scale);
         }
         self.draw_quad(self.game, Self::clip((GAME_X, GAME_Y, GAME_W, GAME_H)));
+        if self.overlay_on {
+            let gl = &self.gl;
+            // SAFETY: GL calls on the current context with this module's objects.
+            unsafe {
+                gl.enable(glow::BLEND);
+                gl.blend_func(glow::ONE, glow::ONE_MINUS_SRC_ALPHA);
+                gl.use_program(Some(self.plain));
+                gl.active_texture(glow::TEXTURE0);
+                gl.bind_texture(glow::TEXTURE_2D, Some(self.overlay));
+                gl.uniform_1_i32(gl.get_uniform_location(self.plain, "image").as_ref(), 0);
+            }
+            self.draw_quad(self.plain, [-1.0, -1.0, 2.0, 2.0]);
+            // SAFETY: as above.
+            unsafe { self.gl.disable(glow::BLEND) };
+        }
         let shot = capture.then(|| self.read_back(self.top.viewport));
         if let Some(v) = self.shared_ui {
             // The bottom screen is in the same window.
