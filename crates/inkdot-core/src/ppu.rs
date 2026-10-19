@@ -1,0 +1,905 @@
+//! The picture processing unit, DMG and CGB.
+//!
+//! The PPU is stepped one dot (2^22 Hz) at a time. Each of the 154 lines is 456 dots: on the
+//! 144 visible lines, an OAM scan (mode 2, 80 dots), then pixel transfer (mode 3), then HBlank
+//! (mode 0) for the rest; lines 144-153 are VBlank (mode 1).
+//!
+//! Mode 3 is modelled as the hardware draws it: a background fetcher fills a pixel FIFO, which
+//! shifts one pixel out per dot. The first fetch of a line is done twice, the first SCX % 8
+//! pixels are discarded, starting the window restarts the fetcher, and objects stall the output
+//! while their tiles are fetched. So mode 3's length, and where on the line a mid-line register
+//! write takes effect, follow from the model rather than from a table. The stall for each object
+//! is Pan Docs' "OBJ penalty algorithm".
+//!
+//! Sources: Pan Docs "Rendering", "Pixel FIFO", "STAT", "LCDC", "OAM", "Tile Data", "Tile
+//! Maps", "Window", "Palettes", "Accessing VRAM and OAM"; the Mooneye PPU tests, dmg-acid2 and
+//! cgb-acid2 for the details.
+
+/// The screen's width in pixels.
+pub const WIDTH: usize = 160;
+/// The screen's height in pixels.
+pub const HEIGHT: usize = 144;
+/// Dots in one line.
+pub const LINE_DOTS: u16 = 456;
+/// Dots in one frame.
+pub const FRAME_DOTS: u32 = 456 * 154;
+
+/// Events a dot can raise, as bits.
+pub mod event {
+    /// VBlank started: request the VBlank interrupt; a frame is complete.
+    pub const VBLANK: u8 = 1;
+    /// The STAT interrupt line rose.
+    pub const STAT: u8 = 2;
+    /// HBlank started on a visible line (for the CGB's HBlank DMA).
+    pub const HBLANK: u8 = 4;
+}
+
+/// An object found by the OAM scan.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct Sprite {
+    x: u8,
+    y: u8,
+    tile: u8,
+    attr: u8,
+    index: u8,
+}
+
+/// One pixel in the object FIFO.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct ObjPixel {
+    /// 0 is transparent.
+    color: u8,
+    /// The attribute byte (palette, priority).
+    attr: u8,
+    /// The OAM index, for the CGB's priority by OAM order.
+    index: u8,
+}
+
+/// The background fetcher's state.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct Fetcher {
+    /// Dots into the current fetch: 0-5 read the tile number, data low, data high (two dots
+    /// each); 6 and on, waiting to push into an empty FIFO.
+    dot: u8,
+    /// The tile column being fetched, counted from the start of the line or of the window.
+    x: u8,
+    tile: u8,
+    attr: u8,
+    lo: u8,
+    hi: u8,
+}
+
+/// The PPU: video memory, registers and rendering state.
+#[derive(Clone, Debug)]
+pub struct Ppu {
+    /// Video RAM, both banks (the second only exists on a CGB).
+    pub vram: [u8; 0x4000],
+    /// Object attribute memory.
+    pub oam: [u8; 160],
+    lcdc: u8,
+    /// STAT's interrupt selects (bits 3-6).
+    stat: u8,
+    scy: u8,
+    scx: u8,
+    lyc: u8,
+    bgp: u8,
+    obp: [u8; 2],
+    wy: u8,
+    wx: u8,
+    /// A CGB, in either mode.
+    cgb: bool,
+    /// A CGB running a CGB game; false on a DMG and for DMG games on a CGB.
+    cgb_mode: bool,
+    vbk: u8,
+    bg_pal: [u8; 64],
+    obj_pal: [u8; 64],
+    bgpi: u8,
+    obpi: u8,
+    /// OPRI bit 0: objects take priority by X (as on a DMG) rather than by OAM index.
+    pub opri: u8,
+
+    /// The line being drawn (0-153).
+    line: u8,
+    /// LY as read: equal to `line`, except early on line 153, which reads 0 after a few dots.
+    ly: u8,
+    /// Dots into the line.
+    dot: u16,
+    /// The mode STAT reports (and that decides memory access).
+    mode: u8,
+    /// The STAT interrupt line, whose rising edge requests the interrupt.
+    stat_line: bool,
+    lyc_match: bool,
+    /// The LCD was turned on this frame: the first line has no OAM scan and the frame isn't
+    /// shown.
+    first_frame: bool,
+    /// The window's Y condition: WY matched LY at the start of some line this frame.
+    win_y: bool,
+    /// The window row to draw next.
+    win_line: u8,
+    /// The window row being drawn on this line.
+    win_row: u8,
+    in_window: bool,
+
+    sprites: [Sprite; 10],
+    n_sprites: u8,
+    next_sprite: u8,
+    /// Set by the bus while an OAM DMA is copying: the scan sees no objects.
+    pub dma_active: bool,
+
+    /// Pixels shifted out on this line (0-160).
+    lx: u8,
+    /// Pixels still to discard at the start of the line (SCX % 8).
+    discard: u8,
+    /// Dots of object fetching still to wait.
+    stall: u8,
+    /// The background FIFO: two bit planes shifting out from bit 7, all pixels of one tile.
+    bg_lo: u8,
+    bg_hi: u8,
+    bg_len: u8,
+    bg_attr: u8,
+    fetcher: Fetcher,
+    /// The first fetch of a line is done twice; this counts down the dots of the first.
+    warmup: u8,
+    obj: [ObjPixel; 8],
+    obj_head: u8,
+    /// The last background tile an object's penalty was counted for.
+    last_penalty_tile: Option<i32>,
+
+    /// The finished picture: shades 0-3 on a DMG, RGB555 colours on a CGB.
+    frame: [u16; WIDTH * HEIGHT],
+    /// The picture being drawn.
+    back: [u16; WIDTH * HEIGHT],
+}
+
+impl Ppu {
+    /// A PPU for a DMG (`cgb` false) or a CGB, in CGB mode or not.
+    pub fn new(cgb: bool, cgb_mode: bool) -> Ppu {
+        Ppu {
+            vram: [0; 0x4000],
+            oam: [0; 160],
+            lcdc: 0,
+            stat: 0,
+            scy: 0,
+            scx: 0,
+            lyc: 0,
+            bgp: 0,
+            obp: [0; 2],
+            wy: 0,
+            wx: 0,
+            cgb,
+            cgb_mode,
+            vbk: 0,
+            bg_pal: [0xff; 64],
+            obj_pal: [0; 64],
+            bgpi: 0,
+            obpi: 0,
+            opri: if cgb_mode { 0 } else { 1 },
+            line: 0,
+            ly: 0,
+            dot: 0,
+            mode: 0,
+            stat_line: false,
+            lyc_match: false,
+            first_frame: false,
+            win_y: false,
+            win_line: 0,
+            win_row: 0,
+            in_window: false,
+            sprites: [Sprite::default(); 10],
+            n_sprites: 0,
+            next_sprite: 0,
+            dma_active: false,
+            lx: 0,
+            discard: 0,
+            stall: 0,
+            bg_lo: 0,
+            bg_hi: 0,
+            bg_len: 0,
+            bg_attr: 0,
+            fetcher: Fetcher::default(),
+            warmup: 0,
+            obj: [ObjPixel::default(); 8],
+            obj_head: 0,
+            last_penalty_tile: None,
+            frame: [0; WIDTH * HEIGHT],
+            back: [0; WIDTH * HEIGHT],
+        }
+    }
+
+    /// The last complete picture, row by row: on a DMG, shades 0 (lightest) to 3; on a CGB,
+    /// RGB555 colours (red in bits 0-4).
+    pub fn frame(&self) -> &[u16; WIDTH * HEIGHT] {
+        &self.frame
+    }
+
+    /// Whether the picture holds RGB555 colours (a CGB) rather than DMG shades.
+    pub fn is_color(&self) -> bool {
+        self.cgb
+    }
+
+    fn lcd_on(&self) -> bool {
+        self.lcdc & 0x80 != 0
+    }
+
+    /// Puts the PPU where the boot ROM leaves it at $0100: on line 153 after LY has reset to
+    /// 0, part-way into the line (`dot`).
+    pub fn set_post_boot(&mut self, lcdc: u8, bgp: u8, dot: u16) {
+        self.lcdc = lcdc;
+        self.bgp = bgp;
+        self.line = 153;
+        self.ly = 0;
+        self.dot = dot;
+        self.mode = 1;
+        self.lyc_match = self.lyc == 0;
+        self.stat_line = self.compute_stat_line();
+    }
+
+    /// Writes a CGB colour palette directly, as the CGB boot ROM does for DMG games (palette
+    /// RAM, `obj` selects which, `index` 0-7, four RGB555 colours).
+    pub fn set_palette(&mut self, obj: bool, index: usize, colors: [u16; 4]) {
+        let ram = if obj {
+            &mut self.obj_pal
+        } else {
+            &mut self.bg_pal
+        };
+        for (i, c) in colors.iter().enumerate() {
+            let [lo, hi] = c.to_le_bytes();
+            ram[index * 8 + i * 2] = lo;
+            ram[index * 8 + i * 2 + 1] = hi;
+        }
+    }
+
+    fn compute_stat_line(&self) -> bool {
+        if !self.lcd_on() {
+            return false;
+        }
+        let s = self.stat;
+        (self.lyc_match && s & 0x40 != 0)
+            || (self.mode == 0 && s & 0x08 != 0)
+            || (self.mode == 1 && s & 0x10 != 0)
+            || (self.mode == 2 && s & 0x20 != 0)
+    }
+
+    /// Re-evaluates the STAT line after a change, returning [`event::STAT`] on a rising edge.
+    fn update_stat(&mut self) -> u8 {
+        let line = self.compute_stat_line();
+        let rose = line && !self.stat_line;
+        self.stat_line = line;
+        if rose {
+            event::STAT
+        } else {
+            0
+        }
+    }
+
+    // CPU access.
+
+    fn vram_blocked(&self) -> bool {
+        self.lcd_on() && self.mode == 3
+    }
+
+    fn oam_blocked(&self) -> bool {
+        self.lcd_on() && (self.mode == 2 || self.mode == 3)
+    }
+
+    /// A CPU read of $8000-$9FFF.
+    pub fn read_vram(&self, addr: u16) -> u8 {
+        if self.vram_blocked() {
+            return 0xff;
+        }
+        self.vram[(self.vbk as usize) << 13 | (addr as usize & 0x1fff)]
+    }
+
+    /// A CPU write to $8000-$9FFF.
+    pub fn write_vram(&mut self, addr: u16, v: u8) {
+        if !self.vram_blocked() {
+            self.vram[(self.vbk as usize) << 13 | (addr as usize & 0x1fff)] = v;
+        }
+    }
+
+    /// A CPU read of $FE00-$FE9F.
+    pub fn read_oam(&self, addr: u16) -> u8 {
+        if self.oam_blocked() {
+            return 0xff;
+        }
+        self.oam[addr as usize & 0xff]
+    }
+
+    /// A CPU write to $FE00-$FE9F.
+    pub fn write_oam(&mut self, addr: u16, v: u8) {
+        if !self.oam_blocked() {
+            self.oam[addr as usize & 0xff] = v;
+        }
+    }
+
+    /// A VRAM write by the CGB's VRAM DMA, into the bank VBK selects.
+    pub fn dma_write_vram(&mut self, addr: u16, v: u8) {
+        self.vram[(self.vbk as usize) << 13 | (addr as usize & 0x1fff)] = v;
+    }
+
+    /// Reads a PPU register ($FF40-$FF4B, $FF4F, $FF68-$FF6C).
+    pub fn read(&self, addr: u16) -> u8 {
+        match addr {
+            0xff40 => self.lcdc,
+            0xff41 => {
+                let mode = if self.lcd_on() { self.mode } else { 0 };
+                0x80 | self.stat | (self.lyc_match as u8) << 2 | mode
+            }
+            0xff42 => self.scy,
+            0xff43 => self.scx,
+            0xff44 => self.ly,
+            0xff45 => self.lyc,
+            0xff47 => self.bgp,
+            0xff48 => self.obp[0],
+            0xff49 => self.obp[1],
+            0xff4a => self.wy,
+            0xff4b => self.wx,
+            0xff4f if self.cgb_mode => 0xfe | self.vbk,
+            0xff68 if self.cgb_mode => self.bgpi | 0x40,
+            0xff69 if self.cgb_mode => {
+                if self.vram_blocked() {
+                    0xff
+                } else {
+                    self.bg_pal[(self.bgpi & 0x3f) as usize]
+                }
+            }
+            0xff6a if self.cgb_mode => self.obpi | 0x40,
+            0xff6b if self.cgb_mode => {
+                if self.vram_blocked() {
+                    0xff
+                } else {
+                    self.obj_pal[(self.obpi & 0x3f) as usize]
+                }
+            }
+            0xff6c if self.cgb => 0xfe | self.opri,
+            _ => 0xff,
+        }
+    }
+
+    /// Writes a PPU register. Returns any events the write raises (a STAT interrupt).
+    pub fn write(&mut self, addr: u16, v: u8) -> u8 {
+        match addr {
+            0xff40 => {
+                let was_on = self.lcd_on();
+                self.lcdc = v;
+                // Clearing the window enable on a CGB forgets the frame's Y condition.
+                if self.cgb && v & 0x20 == 0 {
+                    self.win_y = false;
+                }
+                if was_on && !self.lcd_on() {
+                    self.turn_off();
+                } else if !was_on && self.lcd_on() {
+                    self.turn_on();
+                }
+                return self.update_stat();
+            }
+            0xff41 => {
+                // The DMG raises a spurious STAT interrupt on any write to STAT while one of
+                // its conditions holds: as if $FF were written for a cycle (Pan Docs "Spurious
+                // STAT interrupts"). The CGB doesn't.
+                let mut ev = 0;
+                if !self.cgb {
+                    self.stat = 0x78;
+                    ev = self.update_stat();
+                }
+                self.stat = v & 0x78;
+                return ev | self.update_stat();
+            }
+            0xff42 => self.scy = v,
+            0xff43 => self.scx = v,
+            0xff45 => {
+                self.lyc = v;
+                if self.lcd_on() {
+                    self.lyc_match = self.ly == self.lyc;
+                }
+                return self.update_stat();
+            }
+            0xff47 => self.bgp = v,
+            0xff48 => self.obp[0] = v,
+            0xff49 => self.obp[1] = v,
+            0xff4a => self.wy = v,
+            0xff4b => self.wx = v,
+            0xff4f if self.cgb_mode => self.vbk = v & 1,
+            0xff68 if self.cgb_mode => self.bgpi = v & 0xbf,
+            0xff69 if self.cgb_mode => {
+                if !self.vram_blocked() {
+                    self.bg_pal[(self.bgpi & 0x3f) as usize] = v;
+                }
+                // The index moves on even when the write is blocked.
+                if self.bgpi & 0x80 != 0 {
+                    self.bgpi = 0x80 | (self.bgpi.wrapping_add(1) & 0x3f);
+                }
+            }
+            0xff6a if self.cgb_mode => self.obpi = v & 0xbf,
+            0xff6b if self.cgb_mode => {
+                if !self.vram_blocked() {
+                    self.obj_pal[(self.obpi & 0x3f) as usize] = v;
+                }
+                if self.obpi & 0x80 != 0 {
+                    self.obpi = 0x80 | (self.obpi.wrapping_add(1) & 0x3f);
+                }
+            }
+            0xff6c if self.cgb_mode => self.opri = v & 1,
+            _ => {}
+        }
+        0
+    }
+
+    fn turn_off(&mut self) {
+        self.line = 0;
+        self.ly = 0;
+        self.dot = 0;
+        self.mode = 0;
+        self.in_window = false;
+        // The screen goes blank: white on a DMG, white on a CGB too.
+        let white = if self.cgb { 0x7fff } else { 0 };
+        self.frame.fill(white);
+    }
+
+    fn turn_on(&mut self) {
+        self.line = 0;
+        self.ly = 0;
+        self.dot = 0;
+        // The first line after the LCD comes on has no OAM scan: it reads as mode 0 until
+        // mode 3 (Mooneye `lcdon_timing`).
+        self.mode = 0;
+        self.first_frame = true;
+        self.win_y = false;
+        self.win_line = 0;
+        self.lyc_match = self.lyc == 0;
+    }
+
+    /// Runs `dots` dots, returning the [`event`]s raised.
+    pub fn tick(&mut self, dots: u32) -> u8 {
+        let mut ev = 0;
+        if !self.lcd_on() {
+            return 0;
+        }
+        for _ in 0..dots {
+            ev |= self.step();
+        }
+        ev
+    }
+
+    fn step(&mut self) -> u8 {
+        let mut ev = 0;
+        let line = self.line;
+        let d = self.dot;
+        if line < 144 {
+            if d == 0 {
+                self.start_line();
+            }
+            if d < 80 {
+                if d & 1 == 1 && !self.first_line_after_on() {
+                    self.scan_entry((d / 2) as usize);
+                }
+            } else if d == 80 {
+                self.mode = 3;
+                self.start_mode3();
+            }
+            if self.mode == 3 {
+                self.mode3_dot();
+                if self.lx == WIDTH as u8 {
+                    self.mode = 0;
+                    if self.in_window {
+                        self.win_line = self.win_line.wrapping_add(1);
+                    }
+                    ev |= event::HBLANK;
+                }
+            }
+        } else if line == 144 && d == 0 {
+            self.mode = 1;
+            ev |= event::VBLANK;
+            if self.first_frame {
+                self.first_frame = false;
+            } else {
+                core::mem::swap(&mut self.frame, &mut self.back);
+            }
+            self.win_y = false;
+            self.win_line = 0;
+            // Entering VBlank also raises the mode 2 condition for a moment (Mooneye
+            // `vblank_stat_intr`).
+            if self.stat & 0x20 != 0 && !self.stat_line {
+                ev |= event::STAT;
+                self.stat_line = true;
+            }
+        }
+        self.dot += 1;
+        if self.dot == LINE_DOTS {
+            self.dot = 0;
+            self.line = if self.line == 153 { 0 } else { self.line + 1 };
+            self.ly = self.line;
+        } else if self.line == 153 && self.dot == 4 {
+            // LY reads 0 for nearly all of line 153.
+            self.ly = 0;
+        }
+        let lyc_match = self.ly == self.lyc;
+        if lyc_match != self.lyc_match {
+            self.lyc_match = lyc_match;
+        }
+        ev | self.update_stat()
+    }
+
+    fn first_line_after_on(&self) -> bool {
+        self.first_frame && self.line == 0
+    }
+
+    fn start_line(&mut self) {
+        self.mode = if self.first_line_after_on() { 0 } else { 2 };
+        self.n_sprites = 0;
+        if self.wy == self.line {
+            self.win_y = true;
+        }
+    }
+
+    fn scan_entry(&mut self, i: usize) {
+        if self.n_sprites == 10 || self.dma_active {
+            return;
+        }
+        let y = self.oam[i * 4];
+        let height = if self.lcdc & 4 != 0 { 16 } else { 8 };
+        let top = self.line as i16 + 16 - y as i16;
+        if (0..height).contains(&top) {
+            self.sprites[self.n_sprites as usize] = Sprite {
+                y,
+                x: self.oam[i * 4 + 1],
+                tile: self.oam[i * 4 + 2],
+                attr: self.oam[i * 4 + 3],
+                index: i as u8,
+            };
+            self.n_sprites += 1;
+        }
+    }
+
+    fn start_mode3(&mut self) {
+        let n = self.n_sprites as usize;
+        // Objects are fetched left to right; ties keep OAM order (a stable sort).
+        self.sprites[..n].sort_by_key(|s| s.x);
+        self.next_sprite = 0;
+        self.lx = 0;
+        self.discard = self.scx & 7;
+        self.stall = 0;
+        self.bg_len = 0;
+        self.fetcher = Fetcher::default();
+        self.warmup = 6;
+        self.obj = [ObjPixel::default(); 8];
+        self.obj_head = 0;
+        self.last_penalty_tile = None;
+        self.in_window = false;
+        // WX below 7 starts the window before the first pixel, shifted left.
+        if self.window_enabled() && self.wx < 7 {
+            self.start_window();
+            self.discard = if self.wx == 0 {
+                self.scx & 7
+            } else {
+                7 - self.wx
+            };
+        }
+    }
+
+    fn window_enabled(&self) -> bool {
+        // On a DMG, LCDC bit 0 off hides the window too.
+        self.win_y && self.lcdc & 0x20 != 0 && (self.cgb_mode || self.lcdc & 1 != 0)
+    }
+
+    fn start_window(&mut self) {
+        self.in_window = true;
+        self.win_row = self.win_line;
+        self.bg_len = 0;
+        self.fetcher = Fetcher::default();
+    }
+
+    fn mode3_dot(&mut self) {
+        if self.warmup > 0 {
+            self.warmup -= 1;
+            return;
+        }
+        if self.stall > 0 {
+            self.stall -= 1;
+            return;
+        }
+        if !self.in_window
+            && self.discard == 0
+            && self.window_enabled()
+            && self.lx as u16 + 7 == self.wx as u16
+        {
+            self.start_window();
+        }
+        self.fetch_dot();
+        if self.bg_len == 0 {
+            return;
+        }
+        if self.discard > 0 {
+            self.pop_bg();
+            self.discard -= 1;
+            return;
+        }
+        if self.sprite_hit() {
+            return;
+        }
+        self.output_pixel();
+    }
+
+    /// Whether an object starts at the current pixel. If one does, its tile is fetched into
+    /// the object FIFO and the output stalls for its penalty.
+    fn sprite_hit(&mut self) -> bool {
+        let mut penalty = 0u8;
+        let objects_on = self.cgb || self.lcdc & 2 != 0;
+        while (self.next_sprite as usize) < self.n_sprites as usize {
+            let s = self.sprites[self.next_sprite as usize];
+            let start = s.x as i16 - 8;
+            if start > self.lx as i16 {
+                break;
+            }
+            self.next_sprite += 1;
+            if !objects_on {
+                continue;
+            }
+            penalty += self.sprite_penalty(s);
+            self.fetch_sprite(s);
+        }
+        if penalty > 0 {
+            // This dot is the first of the stall.
+            self.stall = penalty - 1;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Pan Docs "OBJ penalty algorithm": 6 dots to fetch the object's tile, plus the wait for
+    /// the background fetch of the tile the object's leftmost pixel is in, counted once per
+    /// tile; an object at OAM X 0 always costs 11.
+    fn sprite_penalty(&mut self, s: Sprite) -> u8 {
+        if s.x == 0 {
+            return 11;
+        }
+        let pixel = s.x as i32 - 8;
+        let pos = if self.in_window {
+            pixel - (self.wx as i32 - 7)
+        } else {
+            pixel + (self.scx & 7) as i32
+        };
+        let tile = pos.div_euclid(8);
+        let mut penalty = 6;
+        if self.last_penalty_tile != Some(tile) {
+            self.last_penalty_tile = Some(tile);
+            let right = 7 - pos.rem_euclid(8);
+            penalty += (right - 2).max(0) as u8;
+        }
+        penalty
+    }
+
+    fn fetch_sprite(&mut self, s: Sprite) {
+        let tall = self.lcdc & 4 != 0;
+        let mut row = (self.line as i16 + 16 - s.y as i16) as u8;
+        let mut tile = s.tile;
+        if tall {
+            tile &= 0xfe;
+        }
+        if s.attr & 0x40 != 0 {
+            row = if tall { 15 } else { 7 } - row;
+        }
+        let bank = if self.cgb_mode && s.attr & 8 != 0 {
+            0x2000
+        } else {
+            0
+        };
+        let addr = bank + tile as usize * 16 + row as usize * 2;
+        let (mut lo, mut hi) = (self.vram[addr], self.vram[addr + 1]);
+        if s.attr & 0x20 != 0 {
+            lo = lo.reverse_bits();
+            hi = hi.reverse_bits();
+        }
+        let start = s.x as i16 - 8;
+        for i in 0..8i16 {
+            let k = start + i - self.lx as i16;
+            if k < 0 {
+                continue;
+            }
+            let color = (hi >> (7 - i) & 1) << 1 | (lo >> (7 - i) & 1);
+            let slot = &mut self.obj[(self.obj_head as usize + k as usize) & 7];
+            // A pixel already in the FIFO keeps its place unless it is transparent; on a CGB
+            // in CGB mode, a lower OAM index wins instead (OPRI clear).
+            let by_index = self.cgb_mode && self.opri & 1 == 0;
+            let replace = color != 0 && (slot.color == 0 || (by_index && s.index < slot.index));
+            if replace {
+                *slot = ObjPixel {
+                    color,
+                    attr: s.attr,
+                    index: s.index,
+                };
+            }
+        }
+    }
+
+    fn fetch_dot(&mut self) {
+        let f = self.fetcher;
+        match f.dot {
+            1 => {
+                let (map, col, y) = if self.in_window {
+                    (self.lcdc & 0x40 != 0, f.x & 31, self.win_row)
+                } else {
+                    let col = ((self.scx >> 3).wrapping_add(f.x)) & 31;
+                    (self.lcdc & 0x08 != 0, col, self.line.wrapping_add(self.scy))
+                };
+                let idx = if map { 0x1c00 } else { 0x1800 } + (y as usize / 8) * 32 + col as usize;
+                self.fetcher.tile = self.vram[idx];
+                self.fetcher.attr = if self.cgb_mode {
+                    self.vram[0x2000 + idx]
+                } else {
+                    0
+                };
+            }
+            3 | 5 => {
+                let y = if self.in_window {
+                    self.win_row
+                } else {
+                    self.line.wrapping_add(self.scy)
+                };
+                let mut row = y & 7;
+                if f.attr & 0x40 != 0 {
+                    row = 7 - row;
+                }
+                let base = if self.lcdc & 0x10 != 0 {
+                    f.tile as usize * 16
+                } else {
+                    (0x1000 + (f.tile as i8 as i32) * 16) as usize
+                };
+                let bank = if f.attr & 8 != 0 { 0x2000 } else { 0 };
+                let addr = bank + base + row as usize * 2 + (f.dot == 5) as usize;
+                let mut v = self.vram[addr];
+                if f.attr & 0x20 != 0 {
+                    v = v.reverse_bits();
+                }
+                if f.dot == 3 {
+                    self.fetcher.lo = v;
+                } else {
+                    self.fetcher.hi = v;
+                }
+            }
+            _ => {}
+        }
+        if self.fetcher.dot < 6 {
+            self.fetcher.dot += 1;
+        } else if self.bg_len == 0 {
+            self.bg_lo = self.fetcher.lo;
+            self.bg_hi = self.fetcher.hi;
+            self.bg_attr = self.fetcher.attr;
+            self.bg_len = 8;
+            self.fetcher.x = self.fetcher.x.wrapping_add(1);
+            self.fetcher.dot = 0;
+        }
+    }
+
+    fn pop_bg(&mut self) -> u8 {
+        let c = (self.bg_hi >> 7) << 1 | self.bg_lo >> 7;
+        self.bg_lo <<= 1;
+        self.bg_hi <<= 1;
+        self.bg_len -= 1;
+        c
+    }
+
+    fn pop_obj(&mut self) -> ObjPixel {
+        let p = core::mem::take(&mut self.obj[self.obj_head as usize]);
+        self.obj_head = (self.obj_head + 1) & 7;
+        p
+    }
+
+    fn color(ram: &[u8; 64], palette: u8, index: u8) -> u16 {
+        let i = palette as usize * 8 + index as usize * 2;
+        u16::from_le_bytes([ram[i], ram[i + 1]]) & 0x7fff
+    }
+
+    fn output_pixel(&mut self) {
+        let attr = self.bg_attr;
+        let mut bg = self.pop_bg();
+        let obj = self.pop_obj();
+        let objects_on = self.lcdc & 2 != 0;
+        let out = if self.cgb_mode {
+            // LCDC bit 0 is the master priority on a CGB: off, objects are always on top.
+            let master = self.lcdc & 1 != 0;
+            let bg_wins = obj.color == 0
+                || !objects_on
+                || (master && bg != 0 && (attr & 0x80 != 0 || obj.attr & 0x80 != 0));
+            if bg_wins {
+                Self::color(&self.bg_pal, attr & 7, bg)
+            } else {
+                Self::color(&self.obj_pal, obj.attr & 7, obj.color)
+            }
+        } else {
+            if self.lcdc & 1 == 0 {
+                bg = 0;
+            }
+            let bg_wins = obj.color == 0 || !objects_on || (obj.attr & 0x80 != 0 && bg != 0);
+            let (pal, index, obj_pal) = if bg_wins {
+                (self.bgp, bg, None)
+            } else {
+                let n = (obj.attr >> 4) & 1;
+                (self.obp[n as usize], obj.color, Some(n))
+            };
+            let shade = (pal >> (index * 2)) & 3;
+            if self.cgb {
+                // A DMG game on a CGB: the shade indexes the compatibility palettes.
+                match obj_pal {
+                    None => Self::color(&self.bg_pal, 0, shade),
+                    Some(n) => Self::color(&self.obj_pal, n, shade),
+                }
+            } else {
+                shade as u16
+            }
+        };
+        self.back[self.line as usize * WIDTH + self.lx as usize] = out;
+        self.lx += 1;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A PPU with the LCD on at the start of line 0 of a normal (not first) frame.
+    fn running(scx: u8) -> Ppu {
+        let mut p = Ppu::new(false, false);
+        p.write(0xff40, 0x91);
+        p.first_frame = false;
+        p.scx = scx;
+        p
+    }
+
+    /// Dots from the start of the line until mode 0.
+    fn mode3_end(p: &mut Ppu) -> u16 {
+        while p.mode != 0 || p.dot < 80 {
+            p.step();
+        }
+        p.dot
+    }
+
+    #[test]
+    fn mode3_is_172_dots_plus_scx_fine_scroll() {
+        for scx in 0..8 {
+            let mut p = running(scx);
+            assert_eq!(mode3_end(&mut p) - 80, 172 + scx as u16, "scx {scx}");
+        }
+    }
+
+    #[test]
+    fn an_object_costs_its_penalty() {
+        // One 8x8 object at X 8 on line 0, SCX 0: 6 dots plus 5 waiting for the first tile.
+        let mut p = running(0);
+        p.oam[0] = 16;
+        p.oam[1] = 8;
+        p.write(0xff40, 0x93);
+        assert_eq!(mode3_end(&mut p) - 80, 172 + 11);
+    }
+
+    #[test]
+    fn an_object_at_x_zero_costs_eleven() {
+        let mut p = running(3);
+        p.oam[0] = 16;
+        p.oam[1] = 0;
+        p.write(0xff40, 0x93);
+        assert_eq!(mode3_end(&mut p) - 80, 172 + 3 + 11);
+    }
+
+    #[test]
+    fn the_window_costs_six_dots() {
+        let mut p = running(0);
+        p.wy = 0;
+        p.wx = 7 + 80;
+        p.write(0xff40, 0xb1);
+        assert_eq!(mode3_end(&mut p) - 80, 172 + 6);
+    }
+
+    #[test]
+    fn a_frame_is_70224_dots_and_raises_vblank_once() {
+        let mut p = running(0);
+        let mut vblanks = 0;
+        for _ in 0..FRAME_DOTS {
+            if p.step() & event::VBLANK != 0 {
+                vblanks += 1;
+            }
+        }
+        assert_eq!((vblanks, p.line, p.dot), (1, 0, 0));
+    }
+}

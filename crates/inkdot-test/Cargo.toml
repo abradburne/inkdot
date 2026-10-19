@@ -1,0 +1,18 @@
+[package]
+name = "inkdot-test"
+description = "Runs inkdot-core headless: test ROM suites, frame and audio hashes, benchmarks."
+publish = false
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+inkdot-core = { path = "../inkdot-core" }
+
+[dev-dependencies]
+serde_json = "1"
+
+[lints]
+workspace = true
