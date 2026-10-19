@@ -113,6 +113,7 @@ fn main() {
         looks,
         look: "gameboy".into(),
         look_use: "use GB".into(),
+        restart: Some("Restart on a real Game Boy? (Same colours now.)".into()),
         options: vec![
             row("lcd", "LCD texture", "Use default (On)", false),
             row("speed", "Timing", "Use default (Smooth)", false),

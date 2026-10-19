@@ -37,6 +37,10 @@ pub enum Action {
         key: String,
         for_game: bool,
     },
+    /// Start the game again on the console its look runs on.
+    Restart,
+    /// Leave it on this console.
+    KeepPlaying,
     ToggleFast,
     Brightness {
         top: bool,
@@ -99,6 +103,8 @@ pub struct Model {
     pub look: String,
     /// What Y does when the look is set here: "use GB".
     pub look_use: String,
+    /// The look runs on the other console: the question to restart on it.
+    pub restart: Option<String>,
     pub options: Vec<OptionRow>,
     pub fast: bool,
     pub top_brightness: Option<u8>,
@@ -353,6 +359,25 @@ impl Ui {
                         action: None,
                     });
                 }
+                // The look runs on the other console: offer to start again on it.
+                if m.restart.is_some() {
+                    for (k, (label, action)) in [
+                        ("Restart", Action::Restart),
+                        ("Not now", Action::KeepPlaying),
+                    ]
+                    .into_iter()
+                    .enumerate()
+                    {
+                        w.push(Widget {
+                            rect: Rect::new(W / 2 - 300 + k as i32 * 310, H - 120, 290, 72),
+                            kind: Kind::Tab {
+                                label: label.into(),
+                                on: k == 0,
+                            },
+                            action: Some(action),
+                        });
+                    }
+                }
             }
             Page::Options => {
                 for (i, (label, on)) in
@@ -469,6 +494,7 @@ impl Ui {
                 self.go(Page::Options);
                 None
             }
+            Kind::Tab { label, .. } if label == "Restart" || label == "Not now" => w.action.clone(),
             Kind::Tab { label, .. } => {
                 if label == "Load" || label == "Save" {
                     self.states_saving = label == "Save";
@@ -689,6 +715,15 @@ impl Ui {
                 "Paused · B or Back to play",
                 SMALL,
                 colour::DIM,
+                Align::Centre,
+            );
+        }
+        if let (Page::Look, Some(q)) = (self.page, &m.restart) {
+            c.text(
+                Rect::new(32, H - 176, W - 64, 44),
+                q,
+                BODY,
+                colour::TEXT,
                 Align::Centre,
             );
         }

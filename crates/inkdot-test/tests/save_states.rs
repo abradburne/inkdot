@@ -109,3 +109,33 @@ fn a_state_says_its_model() {
     );
     assert_eq!(boot(&rom, Model::Dmg).load_state(&on_dmg), Ok(()));
 }
+
+/// A DMG game on a CGB: after its compatibility palettes change, the finished picture can be
+/// drawn again in the new colours without running a frame (a look picked while paused).
+#[test]
+fn a_paused_picture_takes_new_colours() {
+    let Some(rom) = fetched("dmg-acid2/dmg-acid2.gb") else {
+        return;
+    };
+    let mut gb = boot(&rom, Model::Cgb);
+    for _ in 0..30 {
+        gb.run_frame();
+    }
+    let before = gb.frame().to_vec();
+    gb.hw.ppu.recolor();
+    assert_eq!(
+        gb.frame(),
+        &before[..],
+        "the same palettes, the same picture"
+    );
+    let grey = [0x7fff, 0x56b5, 0x294a, 0x0000];
+    gb.hw.ppu.set_palette(false, 0, grey);
+    gb.hw.ppu.set_palette(true, 0, grey);
+    gb.hw.ppu.set_palette(true, 1, grey);
+    gb.hw.ppu.recolor();
+    assert!(gb.frame().iter().all(|c| grey.contains(c)));
+    // The next frame drawn agrees with the recoloured one.
+    let recoloured = gb.frame().to_vec();
+    gb.run_frame();
+    assert_eq!(gb.frame(), &recoloured[..]);
+}

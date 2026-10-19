@@ -81,6 +81,12 @@ pub fn raw(c: u16) -> [u8; 3] {
     [ch(0), ch(5), ch(10)]
 }
 
+/// The nearest RGB555 colour to an RGB one, for writing a look's shades into CGB palettes.
+pub fn rgb555(c: [u8; 3]) -> u16 {
+    let five = |v: u8| (v as u16 * 31 + 127) / 255;
+    five(c[0]) | five(c[1]) << 5 | five(c[2]) << 10
+}
+
 /// A CGB colour as its screen shows it (see the module's comment).
 pub fn screen(c: u16) -> [u8; 3] {
     let lin = |shift: u16| {
@@ -112,6 +118,19 @@ pub fn color_table(screen_like: bool) -> Vec<[u8; 4]> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shades_survive_rgb555() {
+        for look in [Look::GameBoy, Look::Pocket, Look::Light, Look::Grey] {
+            for s in look.shades() {
+                let back = raw(rgb555(s));
+                assert!(
+                    s.iter().zip(back).all(|(a, b)| a.abs_diff(b) <= 4),
+                    "{s:?} {back:?}"
+                );
+            }
+        }
+    }
 
     #[test]
     fn raw_colours_span_0_to_255() {

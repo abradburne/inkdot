@@ -72,6 +72,11 @@ const IDLE: Duration = Duration::from_secs(10);
 struct Debug {
     stats: bool,
     shot: Option<PathBuf>,
+    /// `shots=DIR`: both screens every two seconds, numbered.
+    shots: Option<PathBuf>,
+    /// `cycle-looks`: the Look page opened and each look chosen in turn, then the restarts,
+    /// through the same actions as taps (to check live changes on the handheld).
+    cycle_looks: bool,
     latency: bool,
     frames: Option<PathBuf>,
     /// The utilization clamp to ask for in play (of 1024), instead of perf::PLAY.
@@ -84,10 +89,12 @@ impl Debug {
         for part in std::env::var("INKDOT_DEBUG").unwrap_or_default().split(',') {
             match part.split_once('=') {
                 Some(("shot", dir)) => d.shot = Some(PathBuf::from(dir)),
+                Some(("shots", dir)) => d.shots = Some(PathBuf::from(dir)),
                 Some(("clamp", n)) => d.clamp = n.parse().ok(),
                 Some(("frames", file)) => d.frames = Some(PathBuf::from(file)),
                 _ if part == "stats" => d.stats = true,
                 _ if part == "latency" => d.latency = true,
+                _ if part == "cycle-looks" => d.cycle_looks = true,
                 _ => {}
             }
         }
@@ -126,6 +133,10 @@ enum Backlight {
 
 struct App {
     gb: GameBoy,
+    /// The game, to start it again on the other console.
+    rom: Vec<u8>,
+    /// "Not now" to restarting on this console: not asked again until the look changes console.
+    declined: Option<Console>,
     options: Options,
     console: &'static str,
     title: String,
@@ -237,7 +248,7 @@ fn run(args: args::Args) -> Result<(), String> {
         look_from.label(console),
         options.settings.file().display()
     );
-    let mut gb = GameBoy::new(rom, model).map_err(|e| e.to_string())?;
+    let mut gb = GameBoy::new(rom.clone(), model).map_err(|e| e.to_string())?;
     if let Some(boot) = &args.boot_rom {
         let data = std::fs::read(boot).map_err(|e| format!("{}: {e}", boot.display()))?;
         gb.hw.set_boot_rom(data);
@@ -272,6 +283,8 @@ fn run(args: args::Args) -> Result<(), String> {
         .map_or(nibkit::audio::ADVICE.rate, |q| q.spec().freq as u32) as f64;
     let mut app = App {
         gb,
+        rom,
+        declined: None,
         options,
         console,
         title: stem.clone(),
@@ -618,21 +631,18 @@ impl App {
                 if key == "@scope" {
                     self.model.for_game = value.as_bool().unwrap_or(true);
                 } else {
-                    let look_before = self.options.str("look");
                     self.options.set(&key, value, for_game);
-                    if key == "look" && self.options.str("look") != look_before {
-                        self.toast("Restart the game for the new console");
-                    }
                     self.apply_look();
                 }
             }
             Action::Unset { key, for_game } => {
-                let look_before = self.options.str("look");
                 self.options.unset(&key, for_game);
-                if key == "look" && self.options.str("look") != look_before {
-                    self.toast("Restart the game for the new console");
-                }
                 self.apply_look();
+            }
+            Action::Restart => self.restart(),
+            Action::KeepPlaying => {
+                self.declined = Some(self.model_for(self.wanted_look()));
+                self.model.restart = None;
             }
             Action::ToggleFast => self.fast = !self.fast,
             Action::Brightness { top, percent } => {
@@ -712,9 +722,51 @@ impl App {
         self.writer.finish();
     }
 
+    /// The look the options ask for: a GB game's chosen look, a GBC game's own colours.
+    fn wanted_look(&self) -> Look {
+        if self.console == "GB" {
+            Look::parse(&self.options.str("look")).unwrap_or(Look::Color)
+        } else {
+            Look::Color
+        }
+    }
+
+    /// The console a look runs on.
+    fn model_for(&self, look: Look) -> Console {
+        if self.console == "GBC" || look == Look::Color {
+            Console::Cgb
+        } else {
+            Console::Dmg
+        }
+    }
+
+    fn running(&self) -> Console {
+        if self.gb.hw.cgb {
+            Console::Cgb
+        } else {
+            Console::Dmg
+        }
+    }
+
+    /// Shows the look the options ask for, at once: every look's colours can be shown live
+    /// except the Color look on a DMG, which only a CGB can make (the restart offer is for
+    /// that, and for running a DMG look on a real DMG).
     fn apply_look(&mut self) {
+        let wanted = self.wanted_look();
+        if !(wanted == Look::Color && self.running() == Console::Dmg) {
+            self.look = wanted;
+        }
         self.colors = if self.console == "GBC" {
             looks::color_table(self.options.str("colors") != "raw")
+        } else if self.gb.hw.ppu.is_color() && self.look != Look::Color {
+            // A DMG look on a CGB: its shades in all three compatibility palettes.
+            let shades = self.look.shades().map(looks::rgb555);
+            self.gb.hw.ppu.set_palette(false, 0, shades);
+            self.gb.hw.ppu.set_palette(true, 0, shades);
+            self.gb.hw.ppu.set_palette(true, 1, shades);
+            // The picture on screen too, though the game may be paused.
+            self.gb.hw.ppu.recolor();
+            looks::color_table(false)
         } else if self.gb.hw.ppu.is_color() {
             // A DMG game on a CGB: colours come from the compatibility palettes, chosen by title
             // or by the player.
@@ -723,23 +775,66 @@ impl App {
                 "up", "a-up", "b-up", "left", "a-left", "b-left", "down", "a-down", "b-down",
                 "right", "a-right", "b-right",
             ];
-            if let Some(i) = names.iter().position(|n| *n == preset) {
-                let [bg, o0, o1] = inkdot_core::compat::PRESETS[i].1;
-                self.gb.hw.ppu.set_palette(false, 0, bg);
-                self.gb.hw.ppu.set_palette(true, 0, o0);
-                self.gb.hw.ppu.set_palette(true, 1, o1);
-            }
+            let [bg, o0, o1] = match names.iter().position(|n| *n == preset) {
+                Some(i) => inkdot_core::compat::PRESETS[i].1,
+                None => inkdot_core::compat::for_header(self.gb.hw.cart.header()),
+            };
+            self.gb.hw.ppu.set_palette(false, 0, bg);
+            self.gb.hw.ppu.set_palette(true, 0, o0);
+            self.gb.hw.ppu.set_palette(true, 1, o1);
+            self.gb.hw.ppu.recolor();
             looks::color_table(true)
         } else {
             let s = self.look.shades();
             (0..4).map(|i| [s[i][0], s[i][1], s[i][2], 255]).collect()
         };
+        let other = self.model_for(wanted);
+        if self.declined != Some(other) {
+            self.declined = None;
+        }
+        self.model.restart = (other != self.running() && self.declined.is_none()).then(|| {
+            match other {
+                Console::Cgb => "Restart as a Game Boy Color for its colours? (Saved first.)",
+                Console::Dmg => "Restart on a Game Boy's own hardware? (Saved first.)",
+            }
+            .to_owned()
+        });
+        self.ui.touch_up();
+    }
+
+    /// Starts the game again on the console its look runs on: where it was is saved first (and
+    /// kept for when the look goes back), the battery RAM and clock carry over, and it resumes
+    /// where it was last left on the new console, if it ever was.
+    fn restart(&mut self) {
+        let model = self.model_for(self.wanted_look());
+        self.files.make_way(self.running());
+        self.save_slot(0);
+        let rom = self.rom.clone();
+        let Ok(mut gb) = GameBoy::new(rom, model) else {
+            return;
+        };
+        gb.hw.cart.load_ram(self.gb.hw.cart.ram());
+        if let Some(clock) = self.gb.hw.cart.rtc_save(saves::unix_now()) {
+            gb.hw.cart.rtc_load(&clock, saves::unix_now());
+        }
+        self.gb = gb;
+        self.played_before = 0;
+        if let Some(slot) = self.files.resume(model) {
+            if self.gb.load_state(&slot.machine).is_ok() {
+                self.played_before = slot.played;
+            }
+        }
+        self.started = Instant::now();
+        self.apply_look();
+        self.ui.close_menu();
+        self.refresh_model();
     }
 
     fn lcd_look(&self) -> LcdLook {
         let lcd = self.options.bool("lcd");
         let shades = self.look.shades();
-        let dmg = !self.gb.hw.ppu.is_color();
+        // A DMG look's screen, on a DMG or in a CGB's palettes alike.
+        let dmg = self.look != Look::Color;
         LcdLook {
             persistence: if lcd {
                 if dmg {
@@ -823,9 +918,17 @@ impl App {
         self.video.upload_frame(&self.rgba);
         let look = self.lcd_look();
         self.frame_count += 1;
+        if self.debug.cycle_looks {
+            self.cycle_looks();
+        }
         let shoot = self.debug.shot.is_some() && self.frame_count == 600;
-        if let Some(px) = self.video.present_top(look, shoot) {
-            self.save_shots(&px);
+        let series = self.debug.shots.is_some() && self.frame_count.is_multiple_of(120);
+        if let Some(px) = self.video.present_top(look, shoot || series) {
+            if series {
+                self.save_series(&px);
+            } else {
+                self.save_shots(&px);
+            }
         }
         let t2 = Instant::now();
         if logging {
@@ -928,6 +1031,60 @@ impl App {
         }
         self.ui.touch_up();
         eprintln!("inkdot: screens saved in {}", dir.display());
+    }
+
+    /// INKDOT_DEBUG=cycle-looks: every four seconds, the next step.
+    fn cycle_looks(&mut self) {
+        let n = self.frame_count;
+        if n == 60 {
+            self.ui.open_menu();
+            self.ui.go(ui::Page::Look);
+        }
+        if n < 180 || !(n - 180).is_multiple_of(240) {
+            return;
+        }
+        let set = |v: &str| Action::Set {
+            key: "look".into(),
+            value: v.into(),
+            for_game: true,
+        };
+        let step = match (n - 180) / 240 {
+            0 => set("color"),
+            1 => set("gameboy"),
+            2 => set("pocket"),
+            3 => set("light"),
+            4 => set("grey"),
+            5 => Action::Restart,
+            6 => set("color"),
+            7 => Action::Restart,
+            _ => return,
+        };
+        eprintln!("inkdot: cycle-looks frame {n}: {step:?}");
+        self.act(Some(step));
+        if !self.ui.menu {
+            self.ui.open_menu();
+            self.ui.go(ui::Page::Look);
+        }
+    }
+
+    /// INKDOT_DEBUG=shots: the top screen and the bottom one's picture, numbered by frame.
+    fn save_series(&mut self, top: &[u8]) {
+        let Some(dir) = self.debug.shots.clone() else {
+            return;
+        };
+        let _ = std::fs::create_dir_all(&dir);
+        let (w, h) = self.video.top_size();
+        let n = self.frame_count;
+        write_png(&dir.join(format!("{n:06}-top.png")), top, w, h);
+        self.ui.touch_up();
+        if let Some(px) = self.ui.render(&self.model) {
+            write_png(
+                &dir.join(format!("{n:06}-bottom.png")),
+                px,
+                ui::W as u32,
+                ui::H as u32,
+            );
+        }
     }
 
     fn exact_frames_due(&mut self) -> u64 {

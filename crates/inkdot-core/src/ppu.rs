@@ -196,6 +196,11 @@ pub struct Ppu {
     frame: [u16; WIDTH * HEIGHT],
     /// The picture being drawn.
     back: [u16; WIDTH * HEIGHT],
+    /// For a DMG game on a CGB, where each pixel's colour came from (palette: 0 background,
+    /// 1-2 objects, times 4, plus the shade), so [`Ppu::recolor`] can redraw the finished
+    /// picture after the compatibility palettes change. Not kept in save states.
+    frame_src: [u8; WIDTH * HEIGHT],
+    back_src: [u8; WIDTH * HEIGHT],
 }
 
 impl Ppu {
@@ -263,6 +268,8 @@ impl Ppu {
             last_penalty_tile: None,
             frame: [0; WIDTH * HEIGHT],
             back: [0; WIDTH * HEIGHT],
+            frame_src: [0; WIDTH * HEIGHT],
+            back_src: [0; WIDTH * HEIGHT],
         }
     }
 
@@ -275,6 +282,21 @@ impl Ppu {
     /// Whether the picture holds RGB555 colours (a CGB) rather than DMG shades.
     pub fn is_color(&self) -> bool {
         self.cgb
+    }
+
+    /// For a DMG game on a CGB: draws the finished picture again from the compatibility
+    /// palettes as they are now (after the player picks other colours, with the game paused).
+    pub fn recolor(&mut self) {
+        if !self.cgb || self.cgb_mode {
+            return;
+        }
+        for (px, &src) in self.frame.iter_mut().zip(self.frame_src.iter()) {
+            let (pal, shade) = (src >> 2, src & 3);
+            *px = match pal {
+                0 => Self::color(&self.bg_pal, 0, shade),
+                n => Self::color(&self.obj_pal, n - 1, shade),
+            };
+        }
     }
 
     /// The line being drawn and the dot within it, for tests and debuggers.
@@ -523,6 +545,7 @@ impl Ppu {
         // The screen goes blank: white on a DMG, white on a CGB too.
         let white = if self.cgb { 0x7fff } else { 0 };
         self.frame.fill(white);
+        self.frame_src.fill(0);
     }
 
     fn turn_on(&mut self) {
@@ -717,6 +740,7 @@ impl Ppu {
                     self.first_frame = false;
                 } else {
                     core::mem::swap(&mut self.frame, &mut self.back);
+                    core::mem::swap(&mut self.frame_src, &mut self.back_src);
                 }
             }
             if d == MODE2_READ_AT {
@@ -1079,7 +1103,9 @@ impl Ppu {
         }
         let row = self.line as usize * WIDTH;
         for lx in 0..WIDTH {
-            self.back[row + lx] = self.mix(bg[lx], attrs[lx], obj[lx]);
+            let (colour, src) = self.mix(bg[lx], attrs[lx], obj[lx]);
+            self.back[row + lx] = colour;
+            self.back_src[row + lx] = src;
         }
         self.lx = WIDTH as u8;
         self.fast = false;
@@ -1175,8 +1201,9 @@ impl Ppu {
     }
 
     /// The colour of one pixel from its background pixel (colour index and CGB attributes)
-    /// and the object pixel over it: the same rules for the FIFO and for a whole line.
-    fn mix(&self, mut bg: u8, attr: u8, obj: ObjPixel) -> u16 {
+    /// and the object pixel over it: the same rules for the FIFO and for a whole line. With it,
+    /// for a DMG game on a CGB, where the colour came from (see `frame_src`).
+    fn mix(&self, mut bg: u8, attr: u8, obj: ObjPixel) -> (u16, u8) {
         let objects_on = self.lcdc & 2 != 0;
         if self.cgb_mode {
             // LCDC bit 0 is the master priority on a CGB: off, objects are always on top.
@@ -1184,11 +1211,12 @@ impl Ppu {
             let bg_wins = obj.color == 0
                 || !objects_on
                 || (master && bg != 0 && (attr & 0x80 != 0 || obj.attr & 0x80 != 0));
-            if bg_wins {
+            let colour = if bg_wins {
                 Self::color(&self.bg_pal, attr & 7, bg)
             } else {
                 Self::color(&self.obj_pal, obj.attr & 7, obj.color)
-            }
+            };
+            (colour, 0)
         } else {
             if self.lcdc & 1 == 0 {
                 bg = 0;
@@ -1204,11 +1232,11 @@ impl Ppu {
             if self.cgb {
                 // A DMG game on a CGB: the shade indexes the compatibility palettes.
                 match obj_pal {
-                    None => Self::color(&self.bg_pal, 0, shade),
-                    Some(n) => Self::color(&self.obj_pal, n, shade),
+                    None => (Self::color(&self.bg_pal, 0, shade), shade),
+                    Some(n) => (Self::color(&self.obj_pal, n, shade), (1 + n) << 2 | shade),
                 }
             } else {
-                shade as u16
+                (shade as u16, 0)
             }
         }
     }
@@ -1217,8 +1245,10 @@ impl Ppu {
         let attr = self.bg_attr;
         let bg = self.pop_bg();
         let obj = self.pop_obj();
-        let out = self.mix(bg, attr, obj);
-        self.back[self.line as usize * WIDTH + self.lx as usize] = out;
+        let (out, src) = self.mix(bg, attr, obj);
+        let i = self.line as usize * WIDTH + self.lx as usize;
+        self.back[i] = out;
+        self.back_src[i] = src;
         self.lx += 1;
     }
 }

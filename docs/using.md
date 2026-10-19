@@ -50,7 +50,7 @@ inkdot's (`~/.config/inkdot/`, or beside the program on the stock OS).
 
 | Option | | Default |
 |---|---|---|
-| Look (GB games) | Game Boy Color (the CGB's own colouring), Game Boy, Game Boy Pocket, Game Boy Light, plain grey. The Color look runs the game on a CGB, the others on a DMG; changing between them takes effect the next time the game starts. | Game Boy Color |
+| Look (GB games) | Game Boy Color (the CGB's own colouring), Game Boy, Game Boy Pocket, Game Boy Light, plain grey. The Color look runs the game on a CGB, the others on a DMG. A new look shows at once, even paused; a DMG look on a game running as a CGB uses that look's colours straight away, and offers to restart on a real DMG; the Color look on a game running as a DMG needs a restart, which it offers (where you are is saved first, and each console keeps its own resume point). | Game Boy Color |
 | Colours (Color look) | By title (as a Game Boy Color picks them), or one of the twelve palettes a Game Boy Color offers for a button held at start-up | By title |
 | Colours (GBC games) | as on its screen (darker and softer, like the original), or as stored | As on its screen |
 | LCD texture | a faint grid between pixels and the original screens' slow pixels | On |
