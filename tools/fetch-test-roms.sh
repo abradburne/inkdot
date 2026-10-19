@@ -68,6 +68,10 @@ fetch cgb-acid2-ref https://raw.githubusercontent.com/mattcurrie/cgb-acid2/maste
     9ea9c262c5383353e77d715d021a0f7c5ccbe438f88082cb225756e50c4fdf01 file
 fetch rtc3test https://github.com/aaaaaa123456789/rtc3test/releases/download/v004/rtc3test.gb \
     a271013fb37ea1d927b854798401320b220d57abb3ca77f3d318ceb8a9def30d file
-fetch mealybug https://github.com/mattcurrie/mealybug-tearoom-tests/raw/master/mealybug-tearoom-tests.zip \
-    e2fa6ca96ad48bd64d7297fda042db04c15117a730da3bbd590f139e89b150bd zip
+# The repository (expected pictures and the ROMs' zip) at a pinned commit.
+fetch mealybug https://codeload.github.com/mattcurrie/mealybug-tearoom-tests/tar.gz/70e88fb90b59d19dfbb9c3ac36c64105202bb1f4 \
+    c7f01ac036fed2bd94f515ac3d1c19924d8b57cf38db0db03ee909eef2712153 tar
+if [ ! -d "$dest/mealybug/roms" ]; then
+    unzip -q "$dest/mealybug/mealybug-tearoom-tests.zip" -d "$dest/mealybug/roms"
+fi
 echo "test ROMs in $dest"

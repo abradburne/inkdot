@@ -443,6 +443,39 @@ pub fn run_suite(suite: &Suite) -> Vec<(PathBuf, Outcome)> {
     })
 }
 
+/// The Mealybug Tearoom tests (mid-scanline PPU) on `model`: each ROM with the number of
+/// pixels that differ from its expected picture (`None` where there is no expected picture for
+/// the model).
+pub fn mealybug(model: Model) -> Vec<(String, Option<usize>)> {
+    let folder = match model {
+        Model::Dmg => "DMG-blob",
+        Model::Cgb => "CPU CGB D",
+    };
+    let expected = tests_dir().join("roms/mealybug/expected").join(folder);
+    let roms = roms("mealybug/roms", |_| true);
+    std::thread::scope(|s| {
+        let handles: Vec<_> = roms
+            .iter()
+            .map(|rom| {
+                let expected = &expected;
+                s.spawn(move || {
+                    let name = rom
+                        .file_stem()
+                        .unwrap_or_default()
+                        .to_string_lossy()
+                        .into_owned();
+                    let png = expected.join(format!("{name}.png"));
+                    let wrong = png
+                        .exists()
+                        .then(|| compare_with_reference(rom, model, &png).len());
+                    (name, wrong)
+                })
+            })
+            .collect();
+        handles.into_iter().map(|h| h.join().unwrap()).collect()
+    })
+}
+
 /// docs/accuracy.md: every suite's results, and the acid2 pictures.
 pub fn accuracy_report() -> String {
     let mut out = String::from(
@@ -507,6 +540,26 @@ pub fn accuracy_report() -> String {
             "not fetched".to_owned()
         };
         out += &format!("| {name} | `{reference}` | {result} |\n");
+    }
+    for (model, name) in [
+        (Model::Dmg, "DMG"),
+        (Model::Cgb, "CGB (CPU CGB D's pictures)"),
+    ] {
+        let results: Vec<_> = mealybug(model)
+            .into_iter()
+            .filter(|(_, w)| w.is_some())
+            .collect();
+        if results.is_empty() {
+            continue;
+        }
+        let passed = results.iter().filter(|(_, w)| *w == Some(0)).count();
+        out += &format!("\nMealybug Tearoom (mid-scanline PPU, stretch) on a {name}: {passed} / {} identical.\n", results.len());
+        for (rom, wrong) in results.iter().filter(|(_, w)| *w != Some(0)) {
+            open.push(format!(
+                "- Mealybug on a {name}: `{rom}` ({} pixels differ)",
+                wrong.unwrap_or(0)
+            ));
+        }
     }
     if !open.is_empty() {
         out += "\n## Not passing yet\n\n";

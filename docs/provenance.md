@@ -24,7 +24,7 @@ hardware behaviour names its source section in its body. Add a row before using 
 | Blargg's Game Boy test ROMs | https://github.com/retrio/gb-test-roms (mirror of the original release) | cpu_instrs, instr_timing, mem_timing(-2), halt_bug, interrupt_time, dmg_sound, cgb_sound, oam_bug; pass = serial or screen text | no licence stated: fetched, not redistributed |
 | Mooneye Test Suite | https://github.com/Gekkio/mooneye-test-suite | acceptance, emulator-only (MBC), misc; pass = Fibonacci registers | MIT |
 | dmg-acid2, cgb-acid2 (Matt Currie) | https://github.com/mattcurrie/dmg-acid2, https://github.com/mattcurrie/cgb-acid2 | PPU, with reference images | MIT |
-| Mealybug Tearoom tests | https://github.com/mattcurrie/mealybug-tearoom-tests | Mid-scanline PPU (stretch) | MIT |
+| Mealybug Tearoom tests | https://github.com/mattcurrie/mealybug-tearoom-tests (commit 70e88fb) | Mid-scanline PPU (stretch): the ROMs, and the expected pictures in `expected/` (DMG-blob, CPU CGB D) | MIT |
 | rtc3test | https://github.com/aaaaaa123456789/rtc3test | MBC3 RTC | Unlicense |
 | SM83 single-step tests | https://github.com/SingleStepTests/sm83 | Per-instruction state and bus-cycle vectors | MIT |
 | SameSuite, gbmicrotest, age test ROMs | their official repositories (test ROMs only) | Stretch targets; their test ROMs and READMEs only, never an emulator's source in the same organisation | per repository |
