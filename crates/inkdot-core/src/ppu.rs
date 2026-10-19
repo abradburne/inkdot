@@ -172,6 +172,9 @@ pub struct Ppu {
     fast_window: Option<u8>,
     /// Always run the pixel FIFO, never the fast path (for tests that compare the two).
     pub fifo_only: bool,
+    /// The end of the run of idle dots last found ([`Ppu::idle_dots`]); 0 when none is known.
+    /// Anything that could change what is idle clears it.
+    idle_end: u16,
     /// The background FIFO: two bit planes shifting out from bit 7, all pixels of one tile.
     bg_lo: u8,
     bg_hi: u8,
@@ -244,6 +247,7 @@ impl Ppu {
             fast_len: 0,
             fast_window: None,
             fifo_only: false,
+            idle_end: 0,
             bg_lo: 0,
             bg_hi: 0,
             bg_len: 0,
@@ -283,6 +287,7 @@ impl Ppu {
     pub fn set_post_boot(&mut self, lcdc: u8, bgp: u8, dot: u16) {
         self.lcdc = lcdc;
         self.bgp = bgp;
+        self.idle_end = 0;
         self.line = 153;
         self.ly = 0;
         self.dot = dot;
@@ -429,6 +434,7 @@ impl Ppu {
 
     /// Writes a PPU register. Returns any events the write raises (a STAT interrupt).
     pub fn write(&mut self, addr: u16, v: u8) -> u8 {
+        self.idle_end = 0;
         // What the line being drawn depends on: the FIFO takes over before it changes.
         if matches!(
             addr,
@@ -504,6 +510,7 @@ impl Ppu {
     }
 
     fn turn_off(&mut self) {
+        self.idle_end = 0;
         self.line = 0;
         self.ly = 0;
         self.dot = 0;
@@ -515,6 +522,7 @@ impl Ppu {
     }
 
     fn turn_on(&mut self) {
+        self.idle_end = 0;
         self.line = 0;
         self.ly = 0;
         self.dot = LCD_ON_DOT;
@@ -548,11 +556,18 @@ impl Ppu {
             return 0;
         }
         let mut left = dots as u16;
+        // Still within a run of idle dots found earlier: nothing to do but count.
+        if self.dot + left <= self.idle_end {
+            self.dot += left;
+            return 0;
+        }
         while left > 0 {
-            let idle = self.idle_dots().min(left);
+            let idle = self.idle_dots();
             if idle > 0 {
-                self.dot += idle;
-                left -= idle;
+                self.idle_end = self.dot + idle;
+                let n = idle.min(left);
+                self.dot += n;
+                left -= n;
             } else {
                 ev |= self.step();
                 left -= 1;
@@ -623,6 +638,7 @@ impl Ppu {
         self.dot += 1;
         if self.dot == LINE_DOTS {
             self.dot = 0;
+            self.idle_end = 0;
             self.line = if self.line == 153 { 0 } else { self.line + 1 };
         }
         if self.dot <= LY_AT + 4 || self.compare_in > 0 || self.compare_ly.is_some() {
@@ -966,6 +982,7 @@ impl Ppu {
             return;
         }
         let elapsed = self.dot - MODE3_AT;
+        self.idle_end = 0;
         self.start_mode3();
         for _ in 0..elapsed {
             self.mode3_dot();
@@ -1289,6 +1306,7 @@ impl Ppu {
         v.bool(&mut self.fast);
         v.u16(&mut self.fast_len);
         v.opt_u8(&mut self.fast_window);
+        self.idle_end = 0;
         v.u16s(&mut self.frame);
         v.u16s(&mut self.back);
     }

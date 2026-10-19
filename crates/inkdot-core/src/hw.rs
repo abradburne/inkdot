@@ -380,13 +380,16 @@ impl Hardware {
     }
 
     fn read_mem(&self, addr: u16) -> u8 {
-        if let Some(boot) = &self.boot_rom {
-            let a = addr as usize;
-            if a < 0x100 || (self.cgb && (0x200..0x900).contains(&a) && a < boot.len()) {
-                return boot[a];
-            }
-        }
         match addr {
+            0x0000..=0x08ff if self.boot_rom.is_some() => {
+                let a = addr as usize;
+                match &self.boot_rom {
+                    Some(boot) if a < 0x100 || (self.cgb && a >= 0x200 && a < boot.len()) => {
+                        boot[a]
+                    }
+                    _ => self.cart.read_rom(addr),
+                }
+            }
             0x0000..=0x7fff => self.cart.read_rom(addr),
             0x8000..=0x9fff => self.ppu.read_vram(addr),
             0xa000..=0xbfff => self.cart.read_ram(addr),

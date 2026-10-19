@@ -54,11 +54,14 @@ const AUDIO_TARGET: u32 = 1200;
 const IDLE: Duration = Duration::from_secs(10);
 
 /// INKDOT_DEBUG: `stats` logs pacing and sound every five seconds; `shot=DIR` saves both
-/// screens as PNG files there ten seconds in. For checking a build on the handheld.
+/// screens as PNG files there ten seconds in; `latency` logs, for each change of the buttons,
+/// when the frame that read it started and the vblank at which it was shown (CLOCK_MONOTONIC
+/// ns, comparable with nibOS's latency tools). For checking a build on the handheld.
 #[derive(Clone, Debug, Default)]
 struct Debug {
     stats: bool,
     shot: Option<PathBuf>,
+    latency: bool,
 }
 
 impl Debug {
@@ -68,6 +71,7 @@ impl Debug {
             match part.split_once('=') {
                 Some(("shot", dir)) => d.shot = Some(PathBuf::from(dir)),
                 _ if part == "stats" => d.stats = true,
+                _ if part == "latency" => d.latency = true,
                 _ => {}
             }
         }
@@ -130,6 +134,10 @@ struct App {
     debug: Debug,
     stats: Stats,
     frame_count: u64,
+    /// INKDOT_DEBUG=latency: the buttons last given to the game, and a change waiting for the
+    /// vblank that shows it (when its frame started).
+    last_buttons: u8,
+    latency_pending: Option<(u8, Duration)>,
 }
 
 fn main() {
@@ -260,6 +268,8 @@ fn run(args: args::Args) -> Result<(), String> {
         debug: Debug::from_env(),
         stats: Stats::default(),
         frame_count: 0,
+        last_buttons: 0,
+        latency_pending: None,
     };
     app.apply_look();
     // Resume where the game was left, unless told not to.
@@ -280,6 +290,13 @@ fn run(args: args::Args) -> Result<(), String> {
         // for a frame: the buttons are read as late as they can be.
         if let Some(v) = &vblank {
             if let Ok(at) = v.wait(Screen::Top) {
+                if let Some((buttons, read)) = app.latency_pending.take() {
+                    eprintln!(
+                        "inkdot: buttons {buttons:02x} read {} shown {}",
+                        read.as_nanos(),
+                        at.as_nanos()
+                    );
+                }
                 app.vblank_stats(at);
                 app.pacer.vblank(at);
                 if let Some(start) = app.pacer.next_start() {
@@ -311,6 +328,17 @@ fn run(args: args::Args) -> Result<(), String> {
     }
     app.leave();
     Ok(())
+}
+
+/// CLOCK_MONOTONIC now, as the vblank timestamps and kernel input events are stamped.
+fn monotonic_now() -> Duration {
+    let mut ts = libc::timespec {
+        tv_sec: 0,
+        tv_nsec: 0,
+    };
+    // SAFETY: clock_gettime fills the struct given.
+    unsafe { libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut ts) };
+    Duration::new(ts.tv_sec as u64, ts.tv_nsec as u32)
 }
 
 /// Sleeps until a CLOCK_MONOTONIC time (as the vblank timestamps are).
@@ -641,7 +669,12 @@ impl App {
         let fast = self.fast || self.controls.fast_held();
         let t0 = Instant::now();
         if !paused {
-            self.gb.set_buttons(self.controls.game_buttons());
+            let buttons = self.controls.game_buttons();
+            if self.debug.latency && buttons != self.last_buttons {
+                self.latency_pending = Some((buttons, monotonic_now()));
+            }
+            self.last_buttons = buttons;
+            self.gb.set_buttons(buttons);
             let frames = if fast {
                 self.options.int("fast").clamp(2, 8) as u64
             } else if self.options.str("speed") == "exact" {

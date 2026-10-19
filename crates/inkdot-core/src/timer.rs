@@ -23,6 +23,8 @@ pub struct Timer {
     /// This M-cycle is the one in which TMA was loaded: writes to TIMA are lost, writes to TMA
     /// go to TIMA as well.
     reloading: bool,
+    /// The counter bit TAC selects, or 0 with the timer off: TIMA's input is `counter & mask`.
+    mask: u16,
 }
 
 impl Timer {
@@ -37,7 +39,12 @@ impl Timer {
     }
 
     fn signal(&self) -> bool {
-        self.tac & 4 != 0 && self.counter & self.bit() != 0
+        self.counter & self.mask != 0
+    }
+
+    fn set_tac(&mut self, v: u8) {
+        self.tac = v & 7;
+        self.mask = if self.tac & 4 != 0 { self.bit() } else { 0 };
     }
 
     fn increment(&mut self) {
@@ -99,7 +106,7 @@ impl Timer {
             }
             _ => {
                 let before = self.signal();
-                self.tac = v & 7;
+                self.set_tac(v);
                 if before && !self.signal() {
                     self.increment();
                 }
@@ -119,6 +126,7 @@ impl Timer {
         v.u8(&mut self.tima);
         v.u8(&mut self.tma);
         v.u8(&mut self.tac);
+        self.set_tac(self.tac);
         v.bool(&mut self.reload_next);
         v.bool(&mut self.reloading);
     }

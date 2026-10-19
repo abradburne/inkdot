@@ -85,7 +85,10 @@ pub struct Video {
     game: glow::Program,
     plain: glow::Program,
     quad: glow::VertexArray,
-    frames: [glow::Texture; 2],
+    /// Game pictures in a ring of three: the newest, the one before (for the LCD's blur), and
+    /// the one being uploaded, which no draw still in flight reads (an upload into a texture
+    /// the GPU is still reading makes the driver wait).
+    frames: [glow::Texture; 3],
     newest: usize,
     ui: glow::Texture,
     ui_ready: bool,
@@ -245,7 +248,11 @@ impl Video {
             gl.vertex_attrib_pointer_f32(0, 2, glow::FLOAT, false, 8, 0);
             vao
         };
-        let frames = [texture(&gl, 160, 144)?, texture(&gl, 160, 144)?];
+        let frames = [
+            texture(&gl, 160, 144)?,
+            texture(&gl, 160, 144)?,
+            texture(&gl, 160, 144)?,
+        ];
         let ui = texture(&gl, screens::WIDTH as i32, screens::HEIGHT as i32)?;
         Ok(Video {
             gl,
@@ -276,7 +283,7 @@ impl Video {
 
     /// Uploads a new game picture (160×144 RGBA).
     pub fn upload_frame(&mut self, rgba: &[u8]) {
-        self.newest ^= 1;
+        self.newest = (self.newest + 1) % 3;
         let gl = &self.gl;
         // SAFETY: GL calls on the current context; `rgba` is 160*144*4 bytes.
         unsafe {
@@ -375,7 +382,7 @@ impl Video {
             gl.active_texture(glow::TEXTURE0);
             gl.bind_texture(glow::TEXTURE_2D, Some(self.frames[self.newest]));
             gl.active_texture(glow::TEXTURE1);
-            gl.bind_texture(glow::TEXTURE_2D, Some(self.frames[self.newest ^ 1]));
+            gl.bind_texture(glow::TEXTURE_2D, Some(self.frames[(self.newest + 2) % 3]));
             let u = |n: &str| gl.get_uniform_location(self.game, n);
             gl.uniform_1_i32(u("now").as_ref(), 0);
             gl.uniform_1_i32(u("before").as_ref(), 1);

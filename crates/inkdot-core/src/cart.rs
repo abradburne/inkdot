@@ -244,6 +244,8 @@ pub struct Cartridge {
     rom0: usize,
     rom1: usize,
     ram_offset: usize,
+    /// An MBC3 with its clock (checked every M-cycle, so kept apart from the enum).
+    has_clock: bool,
 }
 
 impl Cartridge {
@@ -294,6 +296,7 @@ impl Cartridge {
             rom0: 0,
             rom1: 0x4000,
             ram_offset: 0,
+            has_clock: matches!(t, 0x0f | 0x10),
         };
         cart.remap();
         Ok(cart)
@@ -376,6 +379,9 @@ impl Cartridge {
 
     /// Advances the cartridge's clock, if it has one, by `dots` of machine time.
     pub fn tick(&mut self, dots: u32) {
+        if !self.has_clock {
+            return;
+        }
         if let Mbc::Mbc3 { rtc: Some(rtc), .. } = &mut self.mbc {
             rtc.tick_dots(dots);
         }
