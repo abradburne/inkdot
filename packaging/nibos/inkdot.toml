@@ -1,0 +1,82 @@
+# inkdot, for DSlot (packaging/nibos/inkdot.toml in inkdot): installed as
+# /usr/share/dslot/emulators/inkdot.toml. inkdot reads this same file (built in) for its own
+# options, so what DSlot shows and what inkdot takes can't disagree.
+name = "inkdot"
+priority = 100
+
+[systems]
+GB = ["/usr/bin/inkdot", "{options}", "--saves", "{saves}", "{rom}"]
+GBC = ["/usr/bin/inkdot", "{options}", "--saves", "{saves}", "{rom}"]
+
+[[options]]
+key = "look"
+label = "Look"
+systems = ["GB"]
+values = ["color", "gameboy", "pocket", "light", "grey"]
+labels = ["Game Boy Color", "Game Boy", "Game Boy Pocket", "Game Boy Light", "Plain grey"]
+default = "color"
+args = ["--look", "{value}"]
+
+[[options]]
+key = "palette"
+label = "Colours (Color look)"
+systems = ["GB"]
+values = ["auto", "up", "a-up", "b-up", "left", "a-left", "b-left", "down", "a-down", "b-down", "right", "a-right", "b-right"]
+labels = ["By title", "Up", "A + Up", "B + Up", "Left", "A + Left", "B + Left", "Down", "A + Down", "B + Down", "Right", "A + Right", "B + Right"]
+default = "auto"
+args = ["--palette", "{value}"]
+
+[[options]]
+key = "colors"
+label = "Colours"
+systems = ["GBC"]
+values = ["screen", "raw"]
+labels = ["As on its screen", "As stored"]
+default = "screen"
+args = ["--colors", "{value}"]
+
+[[options]]
+key = "lcd"
+label = "LCD texture"
+kind = "toggle"
+default = true
+args = ["--lcd"]
+off = ["--no-lcd"]
+
+[[options]]
+key = "speed"
+label = "Timing"
+values = ["panel", "exact"]
+labels = ["Smooth (panel rate)", "Exact speed"]
+default = "panel"
+args = ["--speed", "{value}"]
+
+[[options]]
+key = "bottom"
+label = "Bottom screen in play"
+values = ["dim", "off", "on"]
+labels = ["Dim when idle", "Off when idle", "Always lit"]
+default = "dim"
+args = ["--bottom", "{value}"]
+
+[[options]]
+key = "resume"
+label = "Resume where I left off"
+kind = "toggle"
+default = true
+args = ["--resume"]
+off = ["--no-resume"]
+
+[[options]]
+key = "fast"
+label = "Fast-forward speed"
+kind = "number"
+min = 2
+max = 8
+unit = "x"
+default = 4
+args = ["--fast", "{value}"]
+
+[[actions]]
+label = "Clear resume state"
+delete = ["{saves}/*.auto.state"]

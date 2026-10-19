@@ -1,0 +1,30 @@
+[package]
+name = "inkdot"
+description = "A Game Boy and Game Boy Color emulator for the Anbernic RG DS+ on nibOS."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+inkdot-core = { path = "../inkdot-core" }
+# nibOS's SDK library (sdk/nibkit in the nibOS repository, MIT): the screens, vblank, buttons,
+# touch, brightness, paths, settings and DSlot's description format.
+nibkit = { path = "../../../nibos/sdk/nibkit", features = ["dslot"] }
+# SDL2's API, linked against the system's SDL2 (sdl2-compat on SDL3), as DSlot does.
+sdl2 = "0.38"
+glow = "0.14"
+png = "0.17"
+fontdue = "0.9"
+miniz_oxide = "0.8"
+libc = "0.2"
+
+# The core forbids unsafe code; the frontend needs it for GL and a few libc calls, each with a
+# SAFETY comment saying why it holds.
+[lints.rust]
+unsafe_code = "allow"
+
+[lints.clippy]
+undocumented_unsafe_blocks = "deny"
+cast_possible_truncation = "allow"
