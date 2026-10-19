@@ -26,6 +26,9 @@ The core passes the test suites that matter for a Game Boy emulator in full:
 | [`crates/inkdot-test`](crates/inkdot-test) | Runs the core headless: the test suites, benchmarks, sound to WAV. |
 | [`packaging/nibos`](packaging/nibos) | The PKGBUILD and the description DSlot reads. |
 
+[docs/performance.md](docs/performance.md) has the measurements on the handheld (about 3 ms a
+frame for most games at full clock; press to screen about 23 ms).
+
 [docs/design.md](docs/design.md) is the design as agreed; [docs/architecture.md](docs/architecture.md)
 how it is built; [docs/using.md](docs/using.md) how to play; [docs/provenance.md](docs/provenance.md)
 the documents and tests it was written from (a clean room: no other emulator's source).
