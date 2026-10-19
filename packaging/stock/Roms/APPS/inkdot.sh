@@ -28,4 +28,5 @@ fi
 echo 0 > /sys/class/anbernic_misc/tpctrl
 
 cd "$progdir" || exit 1
-./inkdot "$@" > "$progdir/log.txt" 2>&1
+# exec: a signal (SIGTERM at shutdown) reaches inkdot, which saves where the game was.
+exec ./inkdot "$@" > "$progdir/log.txt" 2>&1
