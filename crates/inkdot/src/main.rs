@@ -1174,12 +1174,27 @@ fn when(t: u64) -> String {
         "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
     ];
     format!(
-        "{} {} {:02}:{:02}",
+        "{} {} {}",
         MONTHS[tm.tm_mon.clamp(0, 11) as usize],
         tm.tm_mday,
-        tm.tm_hour,
-        tm.tm_min
+        nibkit::clock::format(tm.tm_hour as u32, tm.tm_min as u32, hour12())
     )
+}
+
+/// Whether times show as 12-hour: the player's choice, shared with DSlot and the rest of nibOS
+/// (`nibkit::clock`), read again each second so a change in DSlot shows at once.
+fn hour12() -> bool {
+    use std::sync::Mutex;
+    static CACHE: Mutex<Option<(Instant, bool)>> = Mutex::new(None);
+    let mut cache = CACHE.lock().unwrap_or_else(|e| e.into_inner());
+    match *cache {
+        Some((at, value)) if at.elapsed() < Duration::from_secs(1) => value,
+        _ => {
+            let value = nibkit::clock::hour12();
+            *cache = Some((Instant::now(), value));
+            value
+        }
+    }
 }
 
 fn played(secs: u64) -> String {
@@ -1192,8 +1207,9 @@ fn played(secs: u64) -> String {
 }
 
 fn clock_now() -> String {
+    // The date is the first two words; the time ("17:05" or "5:05 PM") the rest.
     let t = when(saves::unix_now());
-    t.rsplit(' ').next().unwrap_or("").to_owned()
+    t.splitn(3, ' ').nth(2).unwrap_or("").to_owned()
 }
 
 /// The battery's charge, from the first power supply that is a battery.
@@ -1215,6 +1231,19 @@ fn battery() -> Option<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Dates and the header's clock follow the shared 12/24-hour choice.
+    #[test]
+    fn times_follow_the_clock_choice() {
+        let date = when(1_760_000_000);
+        let clock = date.splitn(3, ' ').nth(2).unwrap();
+        if hour12() {
+            assert!(clock.ends_with(" AM") || clock.ends_with(" PM"), "{date}");
+        } else {
+            assert_eq!(clock.len(), 5, "{date}");
+        }
+        assert!(!clock_now().is_empty());
+    }
 
     #[test]
     fn played_time() {

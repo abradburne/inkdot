@@ -29,7 +29,9 @@ resumes there.
 While the game plays, the bottom screen has six tiles: **Save** and **Load** (each opens the six
 slots, with each state's picture, date and play time, and empty ones marked; saving over a state
 asks for a second tap), **Look**, **Fast**, **Options** and **Quit**. Menu + R saves straight into
-the quick slot, the last one saved or loaded, and Menu + L loads it. Untouched for ten seconds it dims, or turns off (see Options); a touch
+the quick slot, the last one saved or loaded, and Menu + L loads it. The time at the top, and the dates of save states, are 12- or 24-hour as chosen in DSlot's
+System page (nibOS's shared clock setting; by default, as the language's custom). Untouched for
+ten seconds it dims, or turns off (see Options); a touch
 wakes it without doing anything else.
 
 ## Options
