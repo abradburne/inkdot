@@ -280,6 +280,13 @@ impl Ppu {
         self.stat_line = self.compute_stat_line();
     }
 
+    /// Sets the palette index registers, as the CGB boot ROM leaves them after writing the
+    /// compatibility palettes.
+    pub fn set_palette_indexes(&mut self, bgpi: u8, obpi: u8) {
+        self.bgpi = bgpi;
+        self.obpi = obpi;
+    }
+
     /// Writes a CGB colour palette directly, as the CGB boot ROM does for DMG games (palette
     /// RAM, `obj` selects which, `index` 0-7, four RGB555 colours).
     pub fn set_palette(&mut self, obj: bool, index: usize, colors: [u16; 4]) {
@@ -382,8 +389,11 @@ impl Ppu {
             0xff49 => self.obp[1],
             0xff4a => self.wy,
             0xff4b => self.wx,
-            0xff4f if self.cgb_mode => 0xfe | self.vbk,
-            0xff68 if self.cgb_mode => self.bgpi | 0x40,
+            // On a CGB, VBK and the palette indexes read back in either mode; in DMG
+            // compatibility mode only the CGB boot ROM could write them (Mooneye
+            // `boot_hwio-C`, `unused_hwio-C`).
+            0xff4f if self.cgb => 0xfe | self.vbk,
+            0xff68 if self.cgb => self.bgpi | 0x40,
             0xff69 if self.cgb_mode => {
                 if self.vram_blocked() {
                     0xff
@@ -391,7 +401,7 @@ impl Ppu {
                     self.bg_pal[(self.bgpi & 0x3f) as usize]
                 }
             }
-            0xff6a if self.cgb_mode => self.obpi | 0x40,
+            0xff6a if self.cgb => self.obpi | 0x40,
             0xff6b if self.cgb_mode => {
                 if self.vram_blocked() {
                     0xff
@@ -579,12 +589,6 @@ impl Ppu {
         } else if line == 144 {
             if d == 0 {
                 self.mode = 1;
-                ev |= event::VBLANK;
-                if self.first_frame {
-                    self.first_frame = false;
-                } else {
-                    core::mem::swap(&mut self.frame, &mut self.back);
-                }
                 self.win_y = false;
                 self.win_line = 0;
                 // Entering VBlank also raises the mode 2 condition for a moment (Mooneye
@@ -593,7 +597,18 @@ impl Ppu {
                     ev |= event::STAT;
                     self.stat_line = true;
                 }
-            } else if d == MODE2_READ_AT {
+            }
+            // The VBlank interrupt comes with it on a DMG, and an M-cycle later on a CGB
+            // (Mooneye `vblank_stat_intr-C`).
+            if d == if self.cgb { 4 } else { 0 } {
+                ev |= event::VBLANK;
+                if self.first_frame {
+                    self.first_frame = false;
+                } else {
+                    core::mem::swap(&mut self.frame, &mut self.back);
+                }
+            }
+            if d == MODE2_READ_AT {
                 self.read_mode = 1;
             }
         }

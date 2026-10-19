@@ -81,6 +81,9 @@ impl GameBoy {
             hw.ppu.set_palette(false, 0, bg);
             hw.ppu.set_palette(true, 0, obj0);
             hw.ppu.set_palette(true, 1, obj1);
+            // The boot ROM wrote 8 bytes of background palette and 16 of object palette with
+            // auto-increment.
+            hw.ppu.set_palette_indexes(0x88, 0x90);
         }
         Ok(GameBoy { cpu, hw, model })
     }

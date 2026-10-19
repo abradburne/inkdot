@@ -73,6 +73,35 @@ fn mooneye_acceptance_dmg() {
     assert_all_pass(&roms, Model::Dmg, Protocol::Mooneye, 20);
 }
 
+/// The acceptance tests with no model suffix hold for every model, the CGB included.
+#[test]
+fn mooneye_acceptance_cgb() {
+    let roms = roms("mooneye/acceptance", |n| {
+        let stem = n.trim_end_matches(".gb");
+        let suffix = stem
+            .rsplit('/')
+            .next()
+            .unwrap_or("")
+            .rsplit_once('-')
+            .map(|(_, s)| s);
+        !matches!(
+            suffix,
+            Some("dmg0" | "dmgABC" | "dmgABCmgb" | "mgb" | "S" | "sgb" | "sgb2" | "GS")
+        )
+    });
+    assert_all_pass(&roms, Model::Cgb, Protocol::Mooneye, 20);
+}
+
+/// The CGB tests in `misc` (CPU CGB-C/E: names ending in -C, -cgb or -cgbABCDE).
+#[test]
+fn mooneye_misc_cgb() {
+    let roms = roms("mooneye/misc", |n| {
+        let stem = n.trim_end_matches(".gb");
+        stem.ends_with("-C") || stem.ends_with("-cgb") || stem.ends_with("-cgbABCDE")
+    });
+    assert_all_pass(&roms, Model::Cgb, Protocol::Mooneye, 20);
+}
+
 #[test]
 fn mooneye_emulator_only() {
     let roms = roms("mooneye/emulator-only", |_| true);

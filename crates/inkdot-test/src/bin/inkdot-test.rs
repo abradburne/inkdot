@@ -1,6 +1,7 @@
 //! `inkdot-test [--cgb] [--mooneye] [--break ADDR] ROM...`: runs test ROMs and prints each
 //! one's outcome. `--break` prints the CPU's registers each time PC reaches ADDR (hex) instead,
-//! for the first few seconds, to see what a test measured.
+//! for the first few seconds, to see what a test measured. `--io` prints $FF00-$FF7F as the
+//! machine starts.
 
 use inkdot_core::Model;
 use inkdot_test::{boot, run, Outcome, Protocol};
@@ -29,6 +30,18 @@ fn main() {
         .filter(|(i, a)| !a.starts_with("--") && (*i == 0 || args[i - 1] != "--break"))
         .map(|(_, a)| a)
         .collect();
+    if args.iter().any(|a| a == "--io") {
+        for rom in &roms {
+            let gb = boot(Path::new(rom), model);
+            for row in (0xff00u16..0xff80).step_by(8) {
+                let bytes: Vec<String> = (row..row + 8)
+                    .map(|a| format!("{:02X}", gb.hw.peek(a)))
+                    .collect();
+                println!("${row:04X}: {}", bytes.join(" "));
+            }
+        }
+        return;
+    }
     if let Some(addr) = brk {
         for rom in roms {
             let mut gb = boot(Path::new(rom), model);

@@ -70,6 +70,9 @@ pub struct Hardware {
     key1: u8,
     /// CGB double speed.
     pub double_speed: bool,
+    /// The CGB's undocumented registers $FF72-$FF75, which only store bits (Pan Docs
+    /// "Undocumented registers").
+    undocumented: [u8; 4],
     dma_src: u16,
     dma_index: u8,
     dma_active: bool,
@@ -107,6 +110,7 @@ impl Hardware {
             svbk: 0,
             key1: 0,
             double_speed: false,
+            undocumented: [0; 4],
             dma_src: 0,
             dma_index: 0,
             dma_active: false,
@@ -284,6 +288,11 @@ impl Hardware {
                 (active ^ 1) << 7 | (self.hdma.remaining & 0x7f)
             }
             0xff70 if self.cgb_mode => 0xf8 | self.svbk,
+            0xff72 | 0xff73 if self.cgb => self.undocumented[addr as usize - 0xff72],
+            0xff74 if self.cgb_mode => self.undocumented[2],
+            0xff75 if self.cgb => 0x8f | self.undocumented[3],
+            // PCM12/PCM34: the channels' current outputs, read-only.
+            0xff76 | 0xff77 if self.cgb => 0,
             0xff40..=0xff4b | 0xff4f | 0xff68..=0xff6c => self.ppu.read(addr),
             _ => 0xff,
         }
@@ -316,6 +325,9 @@ impl Hardware {
             0xff54 if self.cgb_mode => self.hdma.dst = (self.hdma.dst & 0x1f00) | (v & 0xf0) as u16,
             0xff55 if self.cgb_mode => self.write_hdma5(v),
             0xff70 if self.cgb_mode => self.svbk = v & 7,
+            0xff72 | 0xff73 if self.cgb => self.undocumented[addr as usize - 0xff72] = v,
+            0xff74 if self.cgb_mode => self.undocumented[2] = v,
+            0xff75 if self.cgb => self.undocumented[3] = v & 0x70,
             0xff40..=0xff4b | 0xff4f | 0xff68..=0xff6c => {
                 let ev = self.ppu.write(addr, v);
                 if ev & event::STAT != 0 {
@@ -405,14 +417,19 @@ impl Hardware {
     /// The I/O state at $0100, as the boot ROM leaves it (Pan Docs "Power Up Sequence",
     /// hardware registers).
     pub fn post_boot(&mut self) {
-        self.p1 = 0;
+        // The CGB boot ROM leaves neither button line selected.
+        self.p1 = if self.cgb { 0x30 } else { 0 };
         self.if_ = 0x01;
         self.apu.set_post_boot();
-        // DIV is $AB on a DMG; the low byte places the counter where the boot ROM's last
-        // instruction leaves it (Mooneye `boot_div`).
-        self.timer.counter = if self.cgb { 0x1ea0 } else { 0xabcc };
-        if self.cgb {
+        // Where the boot ROM's last instruction leaves the system counter: DIV $AB on a DMG,
+        // $26 on a CGB running a DMG game, each with the phase Mooneye's `boot_div` tests
+        // measure. The CGB boot ROM's length depends on the header, and no test pins down a
+        // CGB game's value, so it starts at the same.
+        self.timer.counter = if self.cgb { 0x2678 } else { 0xabcc };
+        if self.cgb_mode {
             self.serial.set_post_boot(0x03);
+        }
+        if self.cgb {
             self.dma_reg = 0;
         }
         self.ppu.set_post_boot(0x91, 0xfc, 400);
