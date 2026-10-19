@@ -1,0 +1,31 @@
+# inkdot: `make check` on every push and pull request. Written before the repository had a
+# remote, so it has not run yet; `make check` locally is the reference. The frontend links
+# SDL2 and builds against nibkit from the nibOS repository, checked out beside this one.
+name: check
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: inkdot
+      - uses: actions/checkout@v4
+        with:
+          repository: abradburne/nibos
+          path: nibos
+      - name: Tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libsdl2-dev shellcheck unzip
+          rustup component add rustfmt clippy
+      - name: make check
+        working-directory: inkdot
+        run: make check

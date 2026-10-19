@@ -1,8 +1,21 @@
 # Design: a Game Boy and Game Boy Color emulator for the RG DS+ on nibOS
 
-Status: **draft for review** (2026-10-19). Nothing below is built yet; core code starts once
-this is approved. Decisions that are the user's to make are collected at the end
-([Decisions](#decisions)). The working name is **Inkdot**; the name is one of the decisions.
+Status: **approved** (2026-10-19), with all seven decisions as recommended (name inkdot,
+MIT OR Apache-2.0, nibkit in nibOS's `sdk/`, panel-locked timing, DMG games on a CGB by default,
+the bottom screen dimmed with an "off" option, resume). Built since; where the build differs from
+this document:
+
+- The band-limited synthesis lives in the core (`synth.rs`), not the frontend: it is plain DSP,
+  and the headless tests can then check the sound.
+- nibkit, the shared crate, was written by the nibOS and DSlot sessions; inkdot uses it. Screen
+  off is nibOS's `bl_power` knob (AGENTS.md "Screen off").
+- The options are declared in the DSlot description, `packaging/nibos/inkdot.toml`, which DSlot
+  shows per console and game and inkdot builds in; changes made in inkdot's own menu are kept in
+  its settings file for now (whether to write DSlot's file instead is with the DSlot session).
+- The DMG looks are Game Boy Color, Game Boy, Pocket, Light and plain grey (the user asked for
+  the original and Pocket styles); the Color look runs the game on a CGB, the others on a DMG.
+
+The rest of this document is the design as reviewed.
 
 ## What it is
 

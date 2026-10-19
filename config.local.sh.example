@@ -1,0 +1,4 @@
+# Copy to config.local.sh (gitignored) and fill in.
+DEVICE=user@handheld.local
+SSH_KEY=$HOME/.ssh/id_ed25519
+BUILD_MACHINE=rgbuild

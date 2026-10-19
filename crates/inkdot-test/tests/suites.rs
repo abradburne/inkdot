@@ -1,125 +1,30 @@
 //! The test ROM suites, as `cargo test` runs them once `tools/fetch-test-roms.sh` has fetched
-//! them. Each suite is one test that runs all its ROMs (in parallel) and lists every failure.
-//! docs/accuracy.md says which ROMs are expected to pass and which are still open.
+//! them: every suite that is a target must pass in full. The same lists make docs/accuracy.md
+//! (`inkdot-test --accuracy`).
 
 use inkdot_core::Model;
-use inkdot_test::{fetched, run, Outcome, Protocol};
-use std::path::PathBuf;
+use inkdot_test::{fetched, run_suite, suites, Outcome};
 
-/// Runs each ROM and returns the ones that didn't pass, with their outcome.
-fn failures(roms: &[PathBuf], model: Model, protocol: Protocol, seconds: u32) -> Vec<String> {
-    let mut out: Vec<String> = std::thread::scope(|s| {
-        let handles: Vec<_> = roms
-            .iter()
-            .map(|rom| s.spawn(move || (rom, run(rom, model, protocol, seconds))))
-            .collect();
-        handles
-            .into_iter()
-            .map(|h| h.join().unwrap())
-            .filter(|(_, o)| *o != Outcome::Pass)
-            .map(|(rom, o)| format!("{}: {o:?}", rom.display()))
-            .collect()
-    });
-    out.sort();
-    out
-}
-
-fn roms(dir: &str, filter: impl Fn(&str) -> bool) -> Vec<PathBuf> {
-    let Some(root) = fetched(dir) else {
-        return Vec::new();
-    };
-    let mut found = Vec::new();
-    let mut stack = vec![root];
-    while let Some(d) = stack.pop() {
-        for e in std::fs::read_dir(d).unwrap().flatten() {
-            let p = e.path();
-            if p.is_dir() {
-                stack.push(p);
-            } else if p.extension().is_some_and(|x| x == "gb" || x == "gbc") {
-                let name = p.to_string_lossy().into_owned();
-                if filter(&name) {
-                    found.push(p);
-                }
+#[test]
+fn target_suites_pass() {
+    if fetched("mooneye").is_none() {
+        return;
+    }
+    let mut failed = Vec::new();
+    for suite in suites().iter().filter(|s| s.target) {
+        assert!(!suite.roms.is_empty(), "{}: no ROMs found", suite.name);
+        for (rom, outcome) in run_suite(suite) {
+            if outcome != Outcome::Pass {
+                failed.push(format!("{}: {}: {outcome:?}", suite.name, rom.display()));
             }
         }
     }
-    found.sort();
-    found
-}
-
-fn assert_all_pass(roms: &[PathBuf], model: Model, protocol: Protocol, seconds: u32) {
-    let failed = failures(roms, model, protocol, seconds);
     assert!(
         failed.is_empty(),
-        "{} of {} failed:\n{}",
+        "{} failed:\n{}",
         failed.len(),
-        roms.len(),
         failed.join("\n")
     );
-}
-
-/// A Mooneye test runs on the DMG unless its name ends in a model list that leaves the DMG
-/// out (-dmg0, -mgb, -S, -sgb, -sgb2 for the others; G in -GS is the DMG).
-fn mooneye_on_dmg(name: &str) -> bool {
-    let stem = name.trim_end_matches(".gb");
-    !["-dmg0", "-mgb", "-S", "-sgb", "-sgb2"]
-        .iter()
-        .any(|s| stem.ends_with(s))
-}
-
-#[test]
-fn mooneye_acceptance_dmg() {
-    let roms = roms("mooneye/acceptance", mooneye_on_dmg);
-    assert_all_pass(&roms, Model::Dmg, Protocol::Mooneye, 20);
-}
-
-/// The acceptance tests with no model suffix hold for every model, the CGB included.
-#[test]
-fn mooneye_acceptance_cgb() {
-    let roms = roms("mooneye/acceptance", |n| {
-        let stem = n.trim_end_matches(".gb");
-        let suffix = stem
-            .rsplit('/')
-            .next()
-            .unwrap_or("")
-            .rsplit_once('-')
-            .map(|(_, s)| s);
-        !matches!(
-            suffix,
-            Some("dmg0" | "dmgABC" | "dmgABCmgb" | "mgb" | "S" | "sgb" | "sgb2" | "GS")
-        )
-    });
-    assert_all_pass(&roms, Model::Cgb, Protocol::Mooneye, 20);
-}
-
-/// The CGB tests in `misc` (CPU CGB-C/E: names ending in -C, -cgb or -cgbABCDE).
-#[test]
-fn mooneye_misc_cgb() {
-    let roms = roms("mooneye/misc", |n| {
-        let stem = n.trim_end_matches(".gb");
-        stem.ends_with("-C") || stem.ends_with("-cgb") || stem.ends_with("-cgbABCDE")
-    });
-    assert_all_pass(&roms, Model::Cgb, Protocol::Mooneye, 20);
-}
-
-#[test]
-fn mooneye_emulator_only() {
-    let roms = roms("mooneye/emulator-only", |_| true);
-    assert_all_pass(&roms, Model::Dmg, Protocol::Mooneye, 20);
-}
-
-#[test]
-fn blargg_cpu_and_timing() {
-    let picked = |n: &str| {
-        n.ends_with("cpu_instrs/cpu_instrs.gb")
-            || n.ends_with("instr_timing.gb")
-            || n.ends_with("mem_timing/mem_timing.gb")
-            || n.ends_with("mem_timing-2/mem_timing.gb")
-            || n.ends_with("halt_bug.gb")
-    };
-    let roms = roms("blargg", picked);
-    assert_all_pass(&roms, Model::Dmg, Protocol::Blargg, 60);
-    assert_all_pass(&roms, Model::Cgb, Protocol::Blargg, 60);
 }
 
 fn acid2(rom: &str, reference: &str, model: Model) {
@@ -161,14 +66,4 @@ fn cgb_acid2() {
         "cgb-acid2-ref/reference.png",
         Model::Cgb,
     );
-}
-
-#[test]
-fn blargg_sound() {
-    let dmg = roms("blargg/dmg_sound/rom_singles", |_| true);
-    assert_all_pass(&dmg, Model::Dmg, Protocol::Blargg, 60);
-    let cgb = roms("blargg/cgb_sound/rom_singles", |_| true);
-    assert_all_pass(&cgb, Model::Cgb, Protocol::Blargg, 60);
-    let interrupt_time = roms("blargg/interrupt_time", |_| true);
-    assert_all_pass(&interrupt_time, Model::Cgb, Protocol::Blargg, 60);
 }

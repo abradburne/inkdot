@@ -2,6 +2,7 @@
 //! one's outcome. `--break` prints the CPU's registers each time PC reaches ADDR (hex) instead,
 //! for the first few seconds, to see what a test measured. `--io` prints $FF00-$FF7F as the
 //! machine starts. `--wav FILE` runs the first ROM for 10 seconds and writes its sound.
+//! `--accuracy FILE` runs every suite and writes the results as Markdown (docs/accuracy.md).
 //! `--bench` runs each ROM for 3600 frames as fast as it can and reports frames per second and
 //! the time per frame.
 
@@ -48,6 +49,14 @@ fn main() {
             gb.take_audio(&mut samples);
         }
         inkdot_test::write_wav(Path::new(wav), &samples, 48_000);
+        return;
+    }
+    if let Some(out) = args
+        .iter()
+        .position(|a| a == "--accuracy")
+        .and_then(|i| args.get(i + 1))
+    {
+        std::fs::write(out, inkdot_test::accuracy_report()).expect("write the report");
         return;
     }
     if args.iter().any(|a| a == "--bench") {

@@ -258,3 +258,260 @@ pub fn write_wav(path: &Path, samples: &[i16], rate: u32) {
     }
     std::fs::write(path, out).expect("write WAV");
 }
+
+/// A group of test ROMs run the same way.
+pub struct Suite {
+    /// As docs/accuracy.md names it.
+    pub name: &'static str,
+    /// The console its ROMs run on.
+    pub model: Model,
+    /// How its ROMs report.
+    pub protocol: Protocol,
+    /// Emulated time allowed per ROM.
+    pub seconds: u32,
+    /// Expected to pass in full (a target); otherwise tracked (a stretch goal).
+    pub target: bool,
+    /// Its ROMs, as found in tests/roms.
+    pub roms: Vec<PathBuf>,
+}
+
+/// Every `.gb`/`.gbc` under a fetched folder whose path `filter` accepts, sorted.
+pub fn roms(dir: &str, filter: impl Fn(&str) -> bool) -> Vec<PathBuf> {
+    let root = tests_dir().join("roms").join(dir);
+    let mut found = Vec::new();
+    let mut stack = vec![root];
+    while let Some(d) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(d) else {
+            continue;
+        };
+        for e in entries.flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                stack.push(p);
+            } else if p.extension().is_some_and(|x| x == "gb" || x == "gbc") {
+                if filter(&p.to_string_lossy()) {
+                    found.push(p);
+                }
+            }
+        }
+    }
+    found.sort();
+    found
+}
+
+/// The model suffix of a Mooneye test's name (`-GS`, `-dmgABC`, `-C`...), if any.
+fn mooneye_suffix(name: &str) -> Option<String> {
+    let stem = name.trim_end_matches(".gb");
+    let file = stem.rsplit('/').next().unwrap_or("");
+    file.rsplit_once('-').map(|(_, s)| s.to_owned())
+}
+
+/// The suites, in the order docs/accuracy.md lists them.
+pub fn suites() -> Vec<Suite> {
+    let blargg = |n: &str| {
+        n.ends_with("cpu_instrs/cpu_instrs.gb")
+            || n.ends_with("instr_timing.gb")
+            || n.ends_with("mem_timing/mem_timing.gb")
+            || n.ends_with("mem_timing-2/mem_timing.gb")
+            || n.ends_with("halt_bug.gb")
+    };
+    let dmg_only = ["dmg0", "mgb", "S", "sgb", "sgb2"];
+    let not_cgb = [
+        "dmg0",
+        "dmgABC",
+        "dmgABCmgb",
+        "mgb",
+        "S",
+        "sgb",
+        "sgb2",
+        "GS",
+    ];
+    let suite = |name, model, protocol, seconds, target, roms| Suite {
+        name,
+        model,
+        protocol,
+        seconds,
+        target,
+        roms,
+    };
+    vec![
+        suite(
+            "Blargg CPU and timing (DMG)",
+            Model::Dmg,
+            Protocol::Blargg,
+            60,
+            true,
+            roms("blargg", blargg),
+        ),
+        suite(
+            "Blargg CPU and timing (CGB)",
+            Model::Cgb,
+            Protocol::Blargg,
+            60,
+            true,
+            roms("blargg", blargg),
+        ),
+        suite(
+            "Blargg dmg_sound (DMG)",
+            Model::Dmg,
+            Protocol::Blargg,
+            60,
+            true,
+            roms("blargg/dmg_sound/rom_singles", |_| true),
+        ),
+        suite(
+            "Blargg cgb_sound (CGB)",
+            Model::Cgb,
+            Protocol::Blargg,
+            60,
+            true,
+            roms("blargg/cgb_sound/rom_singles", |_| true),
+        ),
+        suite(
+            "Blargg interrupt_time (CGB)",
+            Model::Cgb,
+            Protocol::Blargg,
+            60,
+            true,
+            roms("blargg/interrupt_time", |_| true),
+        ),
+        suite(
+            "Mooneye acceptance (DMG-ABC)",
+            Model::Dmg,
+            Protocol::Mooneye,
+            20,
+            true,
+            roms("mooneye/acceptance", |n| {
+                !mooneye_suffix(n).is_some_and(|s| dmg_only.contains(&s.as_str()))
+            }),
+        ),
+        suite(
+            "Mooneye acceptance, model-independent (CGB)",
+            Model::Cgb,
+            Protocol::Mooneye,
+            20,
+            true,
+            roms("mooneye/acceptance", |n| {
+                !mooneye_suffix(n).is_some_and(|s| not_cgb.contains(&s.as_str()))
+            }),
+        ),
+        suite(
+            "Mooneye misc (CGB-C/E)",
+            Model::Cgb,
+            Protocol::Mooneye,
+            20,
+            true,
+            roms("mooneye/misc", |n| {
+                mooneye_suffix(n).is_some_and(|s| matches!(s.as_str(), "C" | "cgb" | "cgbABCDE"))
+            }),
+        ),
+        suite(
+            "Mooneye emulator-only (MBC1, MBC2, MBC5)",
+            Model::Dmg,
+            Protocol::Mooneye,
+            20,
+            true,
+            roms("mooneye/emulator-only", |_| true),
+        ),
+        suite(
+            "Blargg oam_bug (DMG)",
+            Model::Dmg,
+            Protocol::Blargg,
+            60,
+            false,
+            roms("blargg/oam_bug/rom_singles", |_| true),
+        ),
+    ]
+}
+
+/// Runs a suite's ROMs in parallel; each ROM with its outcome, in order.
+pub fn run_suite(suite: &Suite) -> Vec<(PathBuf, Outcome)> {
+    std::thread::scope(|s| {
+        let handles: Vec<_> = suite
+            .roms
+            .iter()
+            .map(|rom| {
+                s.spawn(move || {
+                    (
+                        rom.clone(),
+                        run(rom, suite.model, suite.protocol, suite.seconds),
+                    )
+                })
+            })
+            .collect();
+        handles.into_iter().map(|h| h.join().unwrap()).collect()
+    })
+}
+
+/// docs/accuracy.md: every suite's results, and the acid2 pictures.
+pub fn accuracy_report() -> String {
+    let mut out = String::from(
+        "# Accuracy\n\nGenerated by `inkdot-test --accuracy docs/accuracy.md` from the test ROMs that\n\
+         `tools/fetch-test-roms.sh` fetches; `cargo test` runs the same lists, and every suite marked\n\
+         *target* must pass in full. Stretch suites are tracked, not required.\n\n\
+         | Suite | Kind | Passed |\n|---|---|---|\n",
+    );
+    let mut open = Vec::new();
+    for suite in suites() {
+        let results = run_suite(&suite);
+        let passed = results.iter().filter(|(_, o)| *o == Outcome::Pass).count();
+        let kind = if suite.target { "target" } else { "stretch" };
+        out += &format!(
+            "| {} | {kind} | {passed} / {} |\n",
+            suite.name,
+            results.len()
+        );
+        for (rom, o) in results.into_iter().filter(|(_, o)| *o != Outcome::Pass) {
+            let name = rom
+                .strip_prefix(tests_dir().join("roms"))
+                .unwrap_or(&rom)
+                .display()
+                .to_string();
+            open.push(format!("- {}: `{name}`", suite.name));
+            let _ = o;
+        }
+    }
+    out += "\n| Picture | Reference | Result |\n|---|---|---|\n";
+    for (rom, reference, model, name) in [
+        (
+            "dmg-acid2/dmg-acid2.gb",
+            "dmg-acid2-ref/reference-dmg.png",
+            Model::Dmg,
+            "dmg-acid2 on a DMG",
+        ),
+        (
+            "dmg-acid2/dmg-acid2.gb",
+            "dmg-acid2-cgb-ref/reference-cgb.png",
+            Model::Cgb,
+            "dmg-acid2 on a CGB",
+        ),
+        (
+            "cgb-acid2/cgb-acid2.gbc",
+            "cgb-acid2-ref/reference.png",
+            Model::Cgb,
+            "cgb-acid2",
+        ),
+    ] {
+        let (r, f) = (
+            tests_dir().join("roms").join(rom),
+            tests_dir().join("roms").join(reference),
+        );
+        let result = if r.exists() && f.exists() {
+            let wrong = compare_with_reference(&r, model, &f).len();
+            if wrong == 0 {
+                "identical".to_owned()
+            } else {
+                format!("{wrong} pixels differ")
+            }
+        } else {
+            "not fetched".to_owned()
+        };
+        out += &format!("| {name} | `{reference}` | {result} |\n");
+    }
+    if !open.is_empty() {
+        out += "\n## Not passing yet\n\n";
+        out += &open.join("\n");
+        out += "\n";
+    }
+    out
+}

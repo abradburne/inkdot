@@ -1,0 +1,4 @@
+# The RG DS+'s cores: Cortex-A55 (tuning and the extensions it has). Builds for the device run
+# natively in the aarch64 build machine; on a Mac this section doesn't apply.
+[target.aarch64-unknown-linux-gnu]
+rustflags = ["-C", "target-cpu=cortex-a55"]
