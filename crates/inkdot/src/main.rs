@@ -100,7 +100,6 @@ impl Debug {
 struct Stats {
     frames: u64,
     missed: u64,
-    last_vblank: Option<Duration>,
     since: Option<Instant>,
     /// The times for running the game, drawing the top screen, its swap, and the bottom screen.
     emulate: Vec<Duration>,
@@ -163,8 +162,10 @@ struct App {
     /// vblank that shows it (when its frame started).
     last_buttons: u8,
     latency_pending: Option<(u8, Duration)>,
-    /// INKDOT_DEBUG=frames: the last vblank waited for, and a record per frame.
+    /// The latest vblank seen, and (INKDOT_DEBUG=frames) the one this frame is planned after,
+    /// with a record per frame.
     vblank_at: Duration,
+    frame_vblank: Duration,
     frame_log: Vec<[u64; 6]>,
 }
 
@@ -304,6 +305,7 @@ fn run(args: args::Args) -> Result<(), String> {
         last_buttons: 0,
         latency_pending: None,
         vblank_at: Duration::ZERO,
+        frame_vblank: Duration::ZERO,
         frame_log: Vec::new(),
     };
     app.apply_look();
@@ -317,7 +319,7 @@ fn run(args: args::Args) -> Result<(), String> {
         }
     }
     app.refresh_model();
-    let vblank = nibkit::vblank::Vblank::open().ok();
+    let vblanks = watch_vblanks();
     let play_clamp = Debug::from_env().clamp.unwrap_or(perf::PLAY);
     if !perf::clamp_min(play_clamp) {
         eprintln!(
@@ -327,23 +329,26 @@ fn run(args: args::Args) -> Result<(), String> {
     let mut clamped_for_menu = false;
     let mut pointers = Vec::new();
     while !app.quit {
-        // Wait for the top panel's vblank, then until the latest moment that still leaves time
-        // for a frame: the buttons are read as late as they can be.
-        if let Some(v) = &vblank {
-            if let Ok(at) = v.wait(Screen::Top) {
+        // Plan the frame for the next refresh it can make, from the top panel's vblanks, and
+        // sleep until the latest start that still makes it: the buttons are read as late as
+        // they can be (pacing.rs). Without vblanks (the stock OS) the swap's vsync paces.
+        if let Some(latest) = &vblanks {
+            let at = Duration::from_nanos(latest.load(Ordering::Acquire));
+            if at > Duration::ZERO && at != app.vblank_at {
+                app.vblank_at = at;
+                app.pacer.vblank(at);
+            }
+            if let Some(plan) = app.pacer.plan(monotonic_now()) {
                 if let Some((buttons, read)) = app.latency_pending.take() {
                     eprintln!(
                         "inkdot: buttons {buttons:02x} read {} shown {}",
                         read.as_nanos(),
-                        at.as_nanos()
+                        plan.deadline.as_nanos()
                     );
                 }
-                app.vblank_stats(at);
-                app.vblank_at = at;
-                app.pacer.vblank(at);
-                if let Some(start) = app.pacer.next_start() {
-                    sleep_until(start);
-                }
+                app.frame_stats(plan.repeated);
+                app.frame_vblank = plan.deadline.saturating_sub(pacing::DEADLINE);
+                sleep_until(plan.start);
             }
         }
         let work = Instant::now();
@@ -375,10 +380,34 @@ fn run(args: args::Args) -> Result<(), String> {
             break;
         }
         app.frame();
-        app.pacer.frame_took(work.elapsed());
+        // Up to the swap, not any wait inside it for the last frame's flip.
+        let blocked = app
+            .video
+            .last_swap()
+            .saturating_sub(Duration::from_millis(1));
+        app.pacer.frame_took(work.elapsed().saturating_sub(blocked));
     }
     app.leave();
     Ok(())
+}
+
+/// The top panel's vblanks, as they come, on a thread of their own: the latest one's time
+/// (CLOCK_MONOTONIC ns, 0 until the first). `None` where there are none to wait for.
+fn watch_vblanks() -> Option<std::sync::Arc<std::sync::atomic::AtomicU64>> {
+    let vblank = nibkit::vblank::Vblank::open().ok()?;
+    vblank.wait(Screen::Top).ok()?;
+    let latest = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
+    let out = latest.clone();
+    std::thread::Builder::new()
+        .name("vblank".into())
+        .spawn(move || loop {
+            match vblank.wait(Screen::Top) {
+                Ok(at) => out.store(at.as_nanos() as u64, Ordering::Release),
+                Err(_) => std::thread::sleep(Duration::from_millis(16)),
+            }
+        })
+        .ok()?;
+    Some(latest)
 }
 
 /// CLOCK_MONOTONIC now, as the vblank timestamps and kernel input events are stamped.
@@ -809,7 +838,7 @@ impl App {
                     .and_then(|s| s.trim().parse().ok())
                     .unwrap_or(0);
             self.frame_log.push([
-                us(self.vblank_at),
+                us(self.frame_vblank),
                 us(m0),
                 us(m1),
                 us(swap_start),
@@ -831,8 +860,11 @@ impl App {
             self.ui.touch_up();
         }
         self.idle_bottom();
+        // The header's clock and battery, when someone may be looking: not while the bottom
+        // screen is dimmed or off in play, where redrawing it would only cost frame time.
         let clock = clock_now();
-        if clock != self.model.clock {
+        let seen = self.ui.menu || self.backlight == Backlight::Lit;
+        if clock != self.model.clock && seen {
             self.model.clock = clock;
             self.model.battery = battery();
             self.ui.touch_up();
@@ -854,18 +886,17 @@ impl App {
 
     /// INKDOT_DEBUG=stats: frames, missed vblanks, the panel's period, the frame budget, the
     /// sound queue and rate, every five seconds.
-    fn vblank_stats(&mut self, at: Duration) {
+    fn frame_stats(&mut self, repeated: u64) {
         if !self.debug.stats {
             return;
         }
         let s = &mut self.stats;
-        if let Some(last) = s.last_vblank {
-            let gap = (at - last).as_secs_f64() / self.pacer.period().as_secs_f64();
-            if gap > 1.5 {
-                s.missed += gap.round() as u64 - 1;
-            }
+        // Refreshes planned without a frame, and swaps that waited for a flip that came a
+        // refresh late (the frame before missed its deadline).
+        s.missed += repeated;
+        if self.video.last_swap() > self.pacer.period() / 2 {
+            s.missed += 1;
         }
-        s.last_vblank = Some(at);
         s.frames += 1;
         let since = *s.since.get_or_insert_with(Instant::now);
         if since.elapsed() >= Duration::from_secs(5) {
@@ -883,10 +914,7 @@ impl App {
                 queued,
                 self.gb.hw.apu.synth().rate(),
             );
-            *s = Stats {
-                last_vblank: s.last_vblank,
-                ..Stats::default()
-            };
+            *s = Stats { ..Stats::default() };
         }
     }
 

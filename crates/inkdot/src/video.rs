@@ -270,6 +270,12 @@ impl Video {
             }
         };
         let context = top.window.gl_create_context()?;
+        // The bottom screen's swaps don't wait for its refresh: it changes rarely, and a wait
+        // there held up the game's next frame (a 48 ms stall each time the clock changed).
+        if let Some(b) = &bottom {
+            b.window.gl_make_current(&context)?;
+            let _ = video.gl_set_swap_interval(SwapInterval::Immediate);
+        }
         top.window.gl_make_current(&context)?;
         video.gl_set_swap_interval(SwapInterval::VSync)?;
         // SAFETY: the loader returns GL entry points for the context just made current.
