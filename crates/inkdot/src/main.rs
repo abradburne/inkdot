@@ -1062,7 +1062,11 @@ impl App {
             7 => Action::Restart,
             8 | 9 => {
                 // Then the Play and States pages, for their captures.
-                self.ui.go(if (n - 180) / 240 == 8 { ui::Page::Play } else { ui::Page::States });
+                self.ui.go(if (n - 180) / 240 == 8 {
+                    ui::Page::Play
+                } else {
+                    ui::Page::States
+                });
                 return;
             }
             _ => return,
@@ -1146,7 +1150,13 @@ impl App {
                 .map(|i| slot_info(&self.files.state(i)))
                 .collect();
         }
-        m.played = played(self.started.elapsed().as_secs()).replace(" played", " today");
+        // Today's play, once there is a minute of it to say.
+        let secs = self.started.elapsed().as_secs();
+        m.played = if secs >= 60 {
+            played(secs).replace(" played", " today")
+        } else {
+            String::new()
+        };
         m.hour12 = hour12();
         m.game_options = option_rows(&self.options, true);
         m.console_options = option_rows(&self.options, false);
