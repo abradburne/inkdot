@@ -96,7 +96,7 @@ impl Hardware {
         Hardware {
             cart,
             ppu: Ppu::new(cgb, cgb_mode),
-            apu: Apu::default(),
+            apu: Apu::new(cgb, 48_000),
             timer: Timer::default(),
             serial: Serial::default(),
             wram: Box::new([0; 0x8000]),
@@ -171,6 +171,17 @@ impl Hardware {
         if self.serial.tick(before, self.timer.counter, self.cgb_mode) {
             self.if_ |= 8;
         }
+        self.div_apu(before);
+    }
+
+    /// Steps the DIV-APU on a falling edge of the system counter's bit 12 (DIV bit 4), bit 13
+    /// at double speed, whatever made it fall: counting, a write to DIV, or STOP (Pan Docs
+    /// "DIV-APU").
+    fn div_apu(&mut self, before: u16) {
+        let bit = if self.double_speed { 1 << 13 } else { 1 << 12 };
+        if before & bit != 0 && self.timer.counter & bit == 0 {
+            self.apu.div_apu_step();
+        }
     }
 
     /// One M-cycle of the parts that change before the CPU's access in it.
@@ -188,6 +199,7 @@ impl Hardware {
         if ev & event::HBLANK != 0 && self.hdma.hblank {
             self.hdma.block_due = true;
         }
+        self.apu.tick(dots);
         self.cart.tick(dots);
         self.dots += dots as u64;
     }
@@ -292,7 +304,8 @@ impl Hardware {
             0xff74 if self.cgb_mode => self.undocumented[2],
             0xff75 if self.cgb => 0x8f | self.undocumented[3],
             // PCM12/PCM34: the channels' current outputs, read-only.
-            0xff76 | 0xff77 if self.cgb => 0,
+            0xff76 if self.cgb => self.apu.pcm().0,
+            0xff77 if self.cgb => self.apu.pcm().1,
             0xff40..=0xff4b | 0xff4f | 0xff68..=0xff6c => self.ppu.read(addr),
             _ => 0xff,
         }
@@ -308,7 +321,11 @@ impl Hardware {
                 }
             }
             0xff01 | 0xff02 => self.serial.write(addr, v),
-            0xff04..=0xff07 => self.timer.write(addr, v),
+            0xff04..=0xff07 => {
+                let before = self.timer.counter;
+                self.timer.write(addr, v);
+                self.div_apu(before);
+            }
             0xff0f => self.if_ = v & 0x1f,
             0xff10..=0xff3f => self.apu.write(addr, v),
             0xff46 => {
@@ -478,14 +495,18 @@ impl Bus for Hardware {
             // The speed switch: the CPU pauses for 2050 M-cycles and DIV is reset (Pan Docs
             // "FF4D — KEY1").
             self.key1 = 0;
-            self.double_speed = !self.double_speed;
+            let before = self.timer.counter;
             self.timer.reset_counter();
+            self.div_apu(before);
+            self.double_speed = !self.double_speed;
             for _ in 0..2050 {
                 self.tick();
             }
             return false;
         }
+        let before = self.timer.counter;
         self.timer.reset_counter();
+        self.div_apu(before);
         true
     }
 

@@ -1,7 +1,7 @@
 //! `inkdot-test [--cgb] [--mooneye] [--break ADDR] ROM...`: runs test ROMs and prints each
 //! one's outcome. `--break` prints the CPU's registers each time PC reaches ADDR (hex) instead,
 //! for the first few seconds, to see what a test measured. `--io` prints $FF00-$FF7F as the
-//! machine starts.
+//! machine starts. `--wav FILE` runs the first ROM for 10 seconds and writes its sound.
 
 use inkdot_core::Model;
 use inkdot_test::{boot, run, Outcome, Protocol};
@@ -27,9 +27,27 @@ fn main() {
     let roms: Vec<&String> = args
         .iter()
         .enumerate()
-        .filter(|(i, a)| !a.starts_with("--") && (*i == 0 || args[i - 1] != "--break"))
+        .filter(|(i, a)| {
+            !a.starts_with("--")
+                && (*i == 0 || (args[i - 1] != "--break" && args[i - 1] != "--wav"))
+        })
         .map(|(_, a)| a)
         .collect();
+    if let Some(wav) = args
+        .iter()
+        .position(|a| a == "--wav")
+        .and_then(|i| args.get(i + 1))
+    {
+        let rom = roms.iter().find(|r| **r != wav).expect("a ROM");
+        let mut gb = boot(Path::new(rom), model);
+        let mut samples = Vec::new();
+        for _ in 0..600 {
+            gb.run_frame();
+            gb.take_audio(&mut samples);
+        }
+        inkdot_test::write_wav(Path::new(wav), &samples, 48_000);
+        return;
+    }
     if args.iter().any(|a| a == "--io") {
         for rom in &roms {
             let gb = boot(Path::new(rom), model);

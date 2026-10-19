@@ -125,6 +125,12 @@ impl GameBoy {
         self.hw.ppu.frame()
     }
 
+    /// Appends the sound made since the last call, as interleaved stereo samples at the
+    /// synthesizer's rate (48 kHz unless changed with [`crate::synth::Synth::set_rate`]).
+    pub fn take_audio(&mut self, out: &mut Vec<i16>) {
+        self.hw.apu.take_samples(out);
+    }
+
     /// Sets the buttons held (the [`crate::hw::button`] bits).
     pub fn set_buttons(&mut self, buttons: u8) {
         self.hw.set_buttons(buttons);

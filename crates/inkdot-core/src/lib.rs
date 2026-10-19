@@ -16,6 +16,7 @@ mod gameboy;
 pub mod hw;
 pub mod ppu;
 pub mod serial;
+pub mod synth;
 pub mod timer;
 
 pub use cart::{CartError, Header};

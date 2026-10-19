@@ -162,3 +162,13 @@ fn cgb_acid2() {
         Model::Cgb,
     );
 }
+
+#[test]
+fn blargg_sound() {
+    let dmg = roms("blargg/dmg_sound/rom_singles", |_| true);
+    assert_all_pass(&dmg, Model::Dmg, Protocol::Blargg, 60);
+    let cgb = roms("blargg/cgb_sound/rom_singles", |_| true);
+    assert_all_pass(&cgb, Model::Cgb, Protocol::Blargg, 60);
+    let interrupt_time = roms("blargg/interrupt_time", |_| true);
+    assert_all_pass(&interrupt_time, Model::Cgb, Protocol::Blargg, 60);
+}

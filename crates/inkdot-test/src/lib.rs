@@ -236,3 +236,25 @@ pub fn write_png(gb_rgb: &[[u8; 3]], path: &Path) {
     let mut w = enc.write_header().expect("PNG header");
     w.write_image_data(&gb_rgb.concat()).expect("PNG data");
 }
+
+/// Writes interleaved stereo 16-bit samples as a WAV file.
+pub fn write_wav(path: &Path, samples: &[i16], rate: u32) {
+    let data_len = (samples.len() * 2) as u32;
+    let mut out = Vec::with_capacity(44 + data_len as usize);
+    out.extend_from_slice(b"RIFF");
+    out.extend_from_slice(&(36 + data_len).to_le_bytes());
+    out.extend_from_slice(b"WAVEfmt ");
+    out.extend_from_slice(&16u32.to_le_bytes());
+    out.extend_from_slice(&1u16.to_le_bytes()); // PCM
+    out.extend_from_slice(&2u16.to_le_bytes()); // stereo
+    out.extend_from_slice(&rate.to_le_bytes());
+    out.extend_from_slice(&(rate * 4).to_le_bytes());
+    out.extend_from_slice(&4u16.to_le_bytes());
+    out.extend_from_slice(&16u16.to_le_bytes());
+    out.extend_from_slice(b"data");
+    out.extend_from_slice(&data_len.to_le_bytes());
+    for s in samples {
+        out.extend_from_slice(&s.to_le_bytes());
+    }
+    std::fs::write(path, out).expect("write WAV");
+}
