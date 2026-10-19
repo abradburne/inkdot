@@ -288,10 +288,10 @@ pub fn roms(dir: &str, filter: impl Fn(&str) -> bool) -> Vec<PathBuf> {
             let p = e.path();
             if p.is_dir() {
                 stack.push(p);
-            } else if p.extension().is_some_and(|x| x == "gb" || x == "gbc") {
-                if filter(&p.to_string_lossy()) {
-                    found.push(p);
-                }
+            } else if p.extension().is_some_and(|x| x == "gb" || x == "gbc")
+                && filter(&p.to_string_lossy())
+            {
+                found.push(p);
             }
         }
     }
