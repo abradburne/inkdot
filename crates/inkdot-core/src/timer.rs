@@ -113,6 +113,17 @@ impl Timer {
     }
 }
 
+impl Timer {
+    pub(crate) fn visit<V: crate::state::Visitor>(&mut self, v: &mut V) {
+        v.u16(&mut self.counter);
+        v.u8(&mut self.tima);
+        v.u8(&mut self.tma);
+        v.u8(&mut self.tac);
+        v.bool(&mut self.reload_next);
+        v.bool(&mut self.reloading);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

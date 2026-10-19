@@ -336,6 +336,39 @@ impl Cartridge {
         }
     }
 
+    /// The MBC3 clock as saved next to battery RAM (`<ROM name>.rtc`): `"IRTC"`, a version
+    /// byte (1), the five registers, the five latched registers, the 32768 Hz ticks into the
+    /// current second (u32), and the wall-clock time of the save in Unix seconds (u64), all
+    /// little-endian: 27 bytes. `None` for a cartridge without a clock.
+    pub fn rtc_save(&self, unix_now: u64) -> Option<Vec<u8>> {
+        let rtc = self.rtc()?;
+        let mut out = Vec::with_capacity(27);
+        out.extend_from_slice(b"IRTC\x01");
+        out.extend_from_slice(&rtc.regs);
+        out.extend_from_slice(&rtc.latched);
+        out.extend_from_slice(&rtc.subsecond.to_le_bytes());
+        out.extend_from_slice(&unix_now.to_le_bytes());
+        Some(out)
+    }
+
+    /// Restores the clock from [`Cartridge::rtc_save`]'s bytes and moves it on by the time
+    /// since they were saved, as the cartridge's battery-powered clock would have run. Returns
+    /// whether the bytes were a clock save.
+    pub fn rtc_load(&mut self, data: &[u8], unix_now: u64) -> bool {
+        let Some(rtc) = self.rtc_mut() else {
+            return false;
+        };
+        if data.len() != 27 || &data[..5] != b"IRTC\x01" {
+            return false;
+        }
+        rtc.regs.copy_from_slice(&data[5..10]);
+        rtc.latched.copy_from_slice(&data[10..15]);
+        rtc.subsecond = u32::from_le_bytes([data[15], data[16], data[17], data[18]]) % 32768;
+        let saved = u64::from_le_bytes(data[19..27].try_into().unwrap_or([0; 8]));
+        rtc.advance_seconds(unix_now.saturating_sub(saved));
+        true
+    }
+
     /// Whether an MBC5 rumble cartridge has its motor on.
     pub fn rumble(&self) -> bool {
         matches!(self.mbc, Mbc::Mbc5 { rumble: true, ram_bank, .. } if ram_bank & 8 != 0)
@@ -479,6 +512,50 @@ impl Cartridge {
     }
 }
 
+impl Rtc {
+    fn visit<V: crate::state::Visitor>(&mut self, v: &mut V) {
+        v.bytes(&mut self.regs);
+        v.bytes(&mut self.latched);
+        v.u32(&mut self.subsecond);
+        v.bool(&mut self.latch_armed);
+        v.u32(&mut self.dots);
+    }
+}
+
+impl Cartridge {
+    /// The bank controller's state and cartridge RAM. The game is the same one (the state's
+    /// header says so), so the controller type and RAM size match.
+    pub(crate) fn visit<V: crate::state::Visitor>(&mut self, v: &mut V) {
+        v.bytes(&mut self.ram);
+        v.bool(&mut self.ram_enabled);
+        match &mut self.mbc {
+            Mbc::None => {}
+            Mbc::Mbc1 {
+                bank, upper, mode, ..
+            } => {
+                v.u8(bank);
+                v.u8(upper);
+                v.bool(mode);
+            }
+            Mbc::Mbc2 { bank } => v.u8(bank),
+            Mbc::Mbc3 { bank, select, rtc } => {
+                v.u8(bank);
+                v.u8(select);
+                if let Some(rtc) = rtc {
+                    rtc.visit(v);
+                }
+            }
+            Mbc::Mbc5 { bank, ram_bank, .. } => {
+                v.u16(bank);
+                v.u8(ram_bank);
+            }
+        }
+        self.remap();
+        // Loading a state changes battery RAM, which then needs saving.
+        self.dirty = self.battery;
+    }
+}
+
 /// An MBC1 multicart (MBC1M) is 1 MiB with a second game's header in bank $10: its upper bank
 /// bits select a game of 16 banks each (Pan Docs "MBC1M").
 fn is_mbc1m(rom: &[u8]) -> bool {
@@ -566,6 +643,19 @@ mod tests {
         assert_eq!(c.read_ram(0xa000), 0x80 | 0x3e);
         c.write_rom(0x4000, 0x08);
         assert_eq!(c.read_ram(0xa000) & 0x3f, 0);
+    }
+
+    #[test]
+    fn rtc_save_carries_the_time_while_off() {
+        let mut c = Cartridge::new(rom(0x10, 4, 3)).unwrap();
+        c.rtc_mut().unwrap().regs = [10, 20, 3, 5, 0];
+        let saved = c.rtc_save(1_000_000).unwrap();
+        assert_eq!(saved.len(), 27);
+        let mut d = Cartridge::new(rom(0x10, 4, 3)).unwrap();
+        // Off for a day, an hour, a minute and five seconds.
+        assert!(d.rtc_load(&saved, 1_000_000 + 86_400 + 3_600 + 65));
+        assert_eq!(d.rtc().unwrap().regs, [15, 21, 4, 6, 0]);
+        assert!(!d.rtc_load(b"not a clock", 0));
     }
 
     #[test]

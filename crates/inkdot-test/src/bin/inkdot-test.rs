@@ -2,6 +2,8 @@
 //! one's outcome. `--break` prints the CPU's registers each time PC reaches ADDR (hex) instead,
 //! for the first few seconds, to see what a test measured. `--io` prints $FF00-$FF7F as the
 //! machine starts. `--wav FILE` runs the first ROM for 10 seconds and writes its sound.
+//! `--bench` runs each ROM for 3600 frames as fast as it can and reports frames per second and
+//! the time per frame.
 
 use inkdot_core::Model;
 use inkdot_test::{boot, run, Outcome, Protocol};
@@ -46,6 +48,32 @@ fn main() {
             gb.take_audio(&mut samples);
         }
         inkdot_test::write_wav(Path::new(wav), &samples, 48_000);
+        return;
+    }
+    if args.iter().any(|a| a == "--bench") {
+        for rom in &roms {
+            let mut gb = boot(Path::new(rom), model);
+            let mut samples = Vec::new();
+            let mut times = Vec::with_capacity(3600);
+            let start = std::time::Instant::now();
+            for _ in 0..3600 {
+                let t = std::time::Instant::now();
+                gb.run_frame();
+                gb.take_audio(&mut samples);
+                samples.clear();
+                times.push(t.elapsed().as_secs_f64() * 1000.0);
+            }
+            let total = start.elapsed().as_secs_f64();
+            times.sort_by(f64::total_cmp);
+            let pct = |p: f64| times[((times.len() - 1) as f64 * p) as usize];
+            println!(
+                "{rom}: {:.0} frames/s; ms per frame: median {:.3}, p99 {:.3}, max {:.3}",
+                3600.0 / total,
+                pct(0.5),
+                pct(0.99),
+                pct(1.0)
+            );
+        }
         return;
     }
     if args.iter().any(|a| a == "--io") {

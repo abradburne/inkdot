@@ -77,3 +77,11 @@ impl Serial {
         }
     }
 }
+
+impl Serial {
+    pub(crate) fn visit<V: crate::state::Visitor>(&mut self, v: &mut V) {
+        v.u8(&mut self.sb);
+        v.u8(&mut self.sc);
+        v.u8(&mut self.bits_left);
+    }
+}

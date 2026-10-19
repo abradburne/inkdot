@@ -463,6 +463,48 @@ impl Hardware {
     }
 }
 
+impl Hardware {
+    pub(crate) fn visit<V: crate::state::Visitor>(&mut self, v: &mut V) {
+        v.bytes(&mut self.wram[..]);
+        v.bytes(&mut self.hram);
+        for r in [
+            &mut self.if_,
+            &mut self.ie,
+            &mut self.p1,
+            &mut self.svbk,
+            &mut self.key1,
+        ] {
+            v.u8(r);
+        }
+        v.bool(&mut self.double_speed);
+        v.bytes(&mut self.undocumented);
+        v.u16(&mut self.dma_src);
+        v.u8(&mut self.dma_index);
+        v.bool(&mut self.dma_active);
+        let (mut pending, (mut src, mut left)) =
+            (self.dma_start.is_some(), self.dma_start.unwrap_or((0, 0)));
+        v.bool(&mut pending);
+        v.u16(&mut src);
+        v.u8(&mut left);
+        self.dma_start = pending.then_some((src, left));
+        v.u8(&mut self.dma_reg);
+        v.u16(&mut self.hdma.src);
+        v.u16(&mut self.hdma.dst);
+        v.u8(&mut self.hdma.remaining);
+        v.bool(&mut self.hdma.hblank);
+        v.bool(&mut self.hdma.block_due);
+        v.bool(&mut self.cpu_halted);
+        v.u64(&mut self.dots);
+        // A state saved while a boot ROM was still mapped resumes with it unmapped: the game
+        // takes over at $0100 as soon as the boot ROM would have finished anyway.
+        let mut boot_mapped = self.boot_rom.is_some();
+        v.bool(&mut boot_mapped);
+        if !boot_mapped {
+            self.boot_rom = None;
+        }
+    }
+}
+
 impl Bus for Hardware {
     fn read(&mut self, addr: u16) -> u8 {
         self.cycle_start();

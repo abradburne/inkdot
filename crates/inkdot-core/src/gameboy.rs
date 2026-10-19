@@ -4,6 +4,7 @@ use crate::cart::{CartError, Cartridge};
 use crate::cpu::{Cpu, Mode};
 use crate::hw::Hardware;
 use crate::ppu::FRAME_DOTS;
+use crate::state::{self, Identity, Reader, StateError, Visitor, Writer};
 use alloc::vec::Vec;
 
 /// Which console to be.
@@ -129,6 +130,80 @@ impl GameBoy {
     /// synthesizer's rate (48 kHz unless changed with [`crate::synth::Synth::set_rate`]).
     pub fn take_audio(&mut self, out: &mut Vec<i16>) {
         self.hw.apu.take_samples(out);
+    }
+
+    fn identity(&self) -> Identity {
+        let header = self.hw.cart.header();
+        Identity {
+            cgb: self.hw.cgb,
+            cgb_mode: self.hw.cgb_mode,
+            checksum: header.global_checksum,
+            title: header.title_bytes,
+        }
+    }
+
+    fn visit_section<V: Visitor>(&mut self, tag: &[u8; 4], v: &mut V) {
+        match tag {
+            b"CPU " => self.cpu.visit(v),
+            b"BUS " => self.hw.visit(v),
+            b"TIMR" => self.hw.timer.visit(v),
+            b"SERL" => self.hw.serial.visit(v),
+            b"PPU " => self.hw.ppu.visit(v),
+            b"APU " => self.hw.apu.visit(v),
+            _ => self.hw.cart.visit(v),
+        }
+    }
+
+    const SECTIONS: [&'static [u8; 4]; 7] = [
+        b"CPU ", b"BUS ", b"TIMR", b"SERL", b"PPU ", b"APU ", b"CART",
+    ];
+
+    /// The whole machine, as a save state ([`crate::state`] describes the format).
+    pub fn save_state(&mut self) -> Vec<u8> {
+        let mut sections = Vec::new();
+        for tag in Self::SECTIONS {
+            let mut w = Writer(Vec::new());
+            self.visit_section(tag, &mut w);
+            sections.push((tag, w.0));
+        }
+        state::encode(self.identity(), &sections)
+    }
+
+    /// Restores a save state made by [`GameBoy::save_state`] for this game and console. On an
+    /// error the machine is left as it was.
+    pub fn load_state(&mut self, data: &[u8]) -> Result<(), StateError> {
+        let sections = state::decode(data, self.identity())?;
+        for tag in Self::SECTIONS {
+            if !sections.iter().any(|(t, _)| t == tag) {
+                return Err(StateError::MissingSection(*tag));
+            }
+        }
+        let before = self.save_state();
+        for (tag, payload) in &sections {
+            let Some(tag) = Self::SECTIONS.iter().find(|t| **t == tag) else {
+                continue;
+            };
+            let mut r = Reader::new(payload);
+            self.visit_section(tag, &mut r);
+            if r.short {
+                self.restore(&before);
+                return Err(StateError::Corrupt);
+            }
+        }
+        self.hw.apu.restart_output();
+        Ok(())
+    }
+
+    /// Puts back a state this machine just made (so it is known to be good).
+    fn restore(&mut self, data: &[u8]) {
+        if let Ok(sections) = state::decode(data, self.identity()) {
+            for (tag, payload) in sections {
+                if let Some(tag) = Self::SECTIONS.iter().find(|t| **t == &tag) {
+                    self.visit_section(tag, &mut Reader::new(payload));
+                }
+            }
+        }
+        self.hw.apu.restart_output();
     }
 
     /// Sets the buttons held (the [`crate::hw::button`] bits).

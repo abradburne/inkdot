@@ -620,6 +620,35 @@ impl Cpu {
     }
 }
 
+impl Cpu {
+    pub(crate) fn visit<V: crate::state::Visitor>(&mut self, v: &mut V) {
+        for r in [&mut self.a, &mut self.f, &mut self.b, &mut self.c] {
+            v.u8(r);
+        }
+        for r in [&mut self.d, &mut self.e, &mut self.h, &mut self.l] {
+            v.u8(r);
+        }
+        v.u16(&mut self.sp);
+        v.u16(&mut self.pc);
+        v.bool(&mut self.ime);
+        v.bool(&mut self.ei_pending);
+        v.bool(&mut self.halt_bug);
+        let mut mode = match self.mode {
+            Mode::Running => 0,
+            Mode::Halted => 1,
+            Mode::Stopped => 2,
+            Mode::Locked => 3,
+        };
+        v.u8(&mut mode);
+        self.mode = match mode {
+            0 => Mode::Running,
+            1 => Mode::Halted,
+            2 => Mode::Stopped,
+            _ => Mode::Locked,
+        };
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

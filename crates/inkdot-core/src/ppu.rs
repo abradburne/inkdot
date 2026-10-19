@@ -959,6 +959,99 @@ impl Ppu {
     }
 }
 
+impl Ppu {
+    pub(crate) fn visit<V: crate::state::Visitor>(&mut self, v: &mut V) {
+        v.bytes(&mut self.vram);
+        v.bytes(&mut self.oam);
+        for r in [
+            &mut self.lcdc,
+            &mut self.stat,
+            &mut self.scy,
+            &mut self.scx,
+            &mut self.lyc,
+        ] {
+            v.u8(r);
+        }
+        v.u8(&mut self.bgp);
+        v.bytes(&mut self.obp);
+        for r in [
+            &mut self.wy,
+            &mut self.wx,
+            &mut self.vbk,
+            &mut self.bgpi,
+            &mut self.obpi,
+        ] {
+            v.u8(r);
+        }
+        v.bytes(&mut self.bg_pal);
+        v.bytes(&mut self.obj_pal);
+        v.u8(&mut self.opri);
+        v.u8(&mut self.line);
+        v.u8(&mut self.ly);
+        v.u16(&mut self.dot);
+        v.u8(&mut self.mode);
+        v.u8(&mut self.read_mode);
+        for r in [
+            &mut self.hblank_next,
+            &mut self.oam_lock,
+            &mut self.vram_lock,
+            &mut self.oam_write_lock,
+            &mut self.vram_write_lock,
+            &mut self.stat_line,
+            &mut self.lyc_match,
+        ] {
+            v.bool(r);
+        }
+        v.u8(&mut self.compare_in);
+        v.opt_u8(&mut self.compare_ly);
+        v.bool(&mut self.first_frame);
+        v.bool(&mut self.win_y);
+        v.u8(&mut self.win_line);
+        v.u8(&mut self.win_row);
+        v.bool(&mut self.in_window);
+        for s in &mut self.sprites {
+            for r in [&mut s.x, &mut s.y, &mut s.tile, &mut s.attr, &mut s.index] {
+                v.u8(r);
+            }
+        }
+        v.u8(&mut self.n_sprites);
+        v.u8(&mut self.next_sprite);
+        v.bool(&mut self.dma_active);
+        for r in [&mut self.lx, &mut self.discard, &mut self.stall] {
+            v.u8(r);
+        }
+        for r in [
+            &mut self.bg_lo,
+            &mut self.bg_hi,
+            &mut self.bg_len,
+            &mut self.bg_attr,
+        ] {
+            v.u8(r);
+        }
+        let f = &mut self.fetcher;
+        for r in [
+            &mut f.dot,
+            &mut f.x,
+            &mut f.tile,
+            &mut f.attr,
+            &mut f.lo,
+            &mut f.hi,
+        ] {
+            v.u8(r);
+        }
+        v.u8(&mut self.warmup);
+        for p in &mut self.obj {
+            for r in [&mut p.color, &mut p.attr, &mut p.index] {
+                v.u8(r);
+            }
+        }
+        v.u8(&mut self.obj_head);
+        v.opt_i32(&mut self.last_penalty_tile);
+        v.u16s(&mut self.frame);
+        v.u16s(&mut self.back);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

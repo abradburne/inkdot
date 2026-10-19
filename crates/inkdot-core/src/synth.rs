@@ -154,6 +154,18 @@ impl Synth {
     }
 }
 
+impl Synth {
+    /// Starts the output afresh at dot `time`, silent until the next level is set.
+    pub fn restart_at(&mut self, time: u64) {
+        self.time = time;
+        self.pos = time * self.step;
+        self.base = self.pos >> 32;
+        self.impulses.clear();
+        self.sum = [0; 2];
+        self.level = [0; 2];
+    }
+}
+
 fn build_kernel() -> Vec<[i32; TAPS]> {
     let cutoff = 20_000.0 / 48_000.0;
     let mut kernel = Vec::with_capacity(PHASES);

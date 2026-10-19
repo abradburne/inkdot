@@ -708,6 +708,91 @@ impl Apu {
     }
 }
 
+impl Length {
+    fn visit<V: crate::state::Visitor>(&mut self, v: &mut V) {
+        v.u16(&mut self.left);
+        v.bool(&mut self.enabled);
+    }
+}
+
+impl Envelope {
+    fn visit<V: crate::state::Visitor>(&mut self, v: &mut V) {
+        v.u8(&mut self.reg);
+        v.u8(&mut self.volume);
+        v.u8(&mut self.timer);
+    }
+}
+
+impl Pulse {
+    fn visit<V: crate::state::Visitor>(&mut self, v: &mut V) {
+        v.bool(&mut self.on);
+        v.u8(&mut self.duty);
+        v.u8(&mut self.step);
+        v.bool(&mut self.started);
+        v.u16(&mut self.period);
+        v.u16(&mut self.timer);
+        self.length.visit(v);
+        self.env.visit(v);
+        v.u8(&mut self.nr10);
+        v.bool(&mut self.sweep_on);
+        v.u16(&mut self.shadow);
+        v.u8(&mut self.sweep_timer);
+        v.bool(&mut self.negated);
+    }
+}
+
+impl Wave {
+    fn visit<V: crate::state::Visitor>(&mut self, v: &mut V) {
+        v.bool(&mut self.on);
+        v.bool(&mut self.dac);
+        v.u8(&mut self.level);
+        v.u16(&mut self.period);
+        v.u16(&mut self.timer);
+        v.u8(&mut self.position);
+        v.u8(&mut self.sample);
+        v.u32(&mut self.since_read);
+        self.length.visit(v);
+        v.bytes(&mut self.ram);
+    }
+}
+
+impl Noise {
+    fn visit<V: crate::state::Visitor>(&mut self, v: &mut V) {
+        v.bool(&mut self.on);
+        v.u8(&mut self.nr43);
+        v.u16(&mut self.lfsr);
+        v.u32(&mut self.timer);
+        self.length.visit(v);
+        self.env.visit(v);
+    }
+}
+
+impl Apu {
+    /// The APU's state. The synthesizer's buffer isn't part of it: after a load it starts
+    /// again from the restored level at the restored time.
+    pub(crate) fn visit<V: crate::state::Visitor>(&mut self, v: &mut V) {
+        v.bool(&mut self.powered);
+        self.ch1.visit(v);
+        self.ch2.visit(v);
+        self.ch3.visit(v);
+        self.ch4.visit(v);
+        v.u8(&mut self.nr50);
+        v.u8(&mut self.nr51);
+        v.u8(&mut self.frame_step);
+        v.u32(&mut self.dot_phase);
+        v.u64(&mut self.now);
+    }
+
+    /// Restarts the synthesizer at the current time and level, after a state is loaded.
+    pub(crate) fn restart_output(&mut self) {
+        let rate = self.synth.rate();
+        self.synth = Synth::new(48_000, self.cgb);
+        self.synth.set_rate(rate);
+        self.synth.restart_at(self.now);
+        self.output_changed();
+    }
+}
+
 fn clock_length(length: &mut Length, on: &mut bool) {
     if length.enabled && length.left > 0 {
         length.left -= 1;
