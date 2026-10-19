@@ -8,7 +8,7 @@ inkdot plays games in `.gb`, `.gbc`, or a `.zip` with one in it. It can be start
 - **By hand**: `inkdot game.gbc`, or `inkdot` alone for the list. `inkdot --help` gives the
   options, which are the same as on the Options page (`--look pocket`, `--no-lcd`, `--fast 6`).
 
-Leaving the game (Back, or Quit on the bottom screen) saves where you are; the next start
+Leaving the game (Menu, or Quit on the bottom screen) saves where you are; the next start
 resumes there.
 
 ## Controls
@@ -18,10 +18,10 @@ resumes there.
 | A, B, Select, Start, D-pad or stick | the Game Boy's buttons |
 | X, Y | turbo A, turbo B |
 | R2 (held) | fast-forward (silent) |
-| Menu | the menu on the bottom screen; the game pauses; D-pad and A to choose, B to go back |
+| Back | the menu on the bottom screen; the game pauses; D-pad and A to choose, B to go back, Back again to play |
+| Menu | save and leave (back to DSlot's shelf) |
 | Menu + R / Menu + L | quick save / quick load |
 | Menu + Select | fast-forward on or off |
-| Back | save and leave |
 | Menu + volume | both screens' brightness (nibOS's own shortcut) |
 
 ## The bottom screen
@@ -61,7 +61,10 @@ computer, `~/.local/share/inkdot/saves/`. `--saves DIR` names another.
 
 `<game>.sav` (battery RAM, the usual format; a `<game>.gbc.sav` or `.gb.sav` from elsewhere is
 read too), `<game>.rtc` (the cartridge clock), `<game>.state1`–`.state6` (save states with their
-pictures) and `<game>.auto.state` (where the game was left). DSlot's **Clear resume state**
+pictures) and `<game>.auto.state` (where the game was left). A Game Boy game runs on a Game Boy
+Color or a Game Boy by its look, and a resume state made on one can't continue on the other: when
+a new look changes the console the game starts again on it, and the old console's resume state is
+kept as `<game>.auto-cgb.state` (or `-dmg`), to resume if the look is changed back. DSlot's **Clear resume state**
 deletes the last.
 
 ## On the stock OS

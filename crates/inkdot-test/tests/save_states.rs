@@ -90,3 +90,22 @@ fn a_state_of_another_game_is_refused() {
         "a failed load leaves the machine as it was"
     );
 }
+
+/// A DMG game's state made on one model won't load on the other (the look decides the model),
+/// and the frontend can tell which model a state needs before trying.
+#[test]
+fn a_state_says_its_model() {
+    let Some(rom) = fetched("dmg-acid2/dmg-acid2.gb") else {
+        return;
+    };
+    let on_cgb = boot(&rom, Model::Cgb).save_state();
+    let on_dmg = boot(&rom, Model::Dmg).save_state();
+    assert_eq!(GameBoy::state_model(&on_cgb), Some(Model::Cgb));
+    assert_eq!(GameBoy::state_model(&on_dmg), Some(Model::Dmg));
+    assert_eq!(GameBoy::state_model(b"not a state"), None);
+    assert_eq!(
+        boot(&rom, Model::Dmg).load_state(&on_cgb),
+        Err(StateError::OtherGame)
+    );
+    assert_eq!(boot(&rom, Model::Dmg).load_state(&on_dmg), Ok(()));
+}

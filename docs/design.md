@@ -285,8 +285,7 @@ Beyond pass/fail:
   instant feedback, no small text. Pages: **Play** (the dashboard above), **States** (slots
   with thumbnails), **Look** (palette, border, LCD effect, with a live preview on the top
   screen), **Options** (the settings, with their level, below), **Quit**. Opening a page other
-  than Play pauses the game (a setting). The physical Menu key (on its release, since
-  `nibos-input` holds Menu back until it knows it isn't a brightness shortcut) opens the same
+  than Play pauses the game (a setting). The Back key opens the same
   menu on the bottom screen and makes it navigable with the D-pad and A/B, for play without
   touching.
 - **Save states**: 6 slots a page shown as 2× thumbnails (320×288, three across), each with its
@@ -365,9 +364,9 @@ the numbers go in the README.
 - The merged gamepad (`nibos-input`) through SDL's game controller API, by **printed** names: A
   (right) → A, B (bottom) → B, Select, Start, the D-pad (or the stick, a setting). SDL's swap of
   the face buttons on this pad is undone in one place (the shared crate, below).
-- **Back** quits to DSlot (saving), bound under both its SDL names (AC_BACK, and "Sleep" as
+- **Back** opens the menu, bound under both its SDL names (AC_BACK, and "Sleep" as
   sdl2-compat passes it), as the nibOS input notes require.
-- **Menu** on its own opens the menu (acted on at release); **Menu + R / L** quick save / load;
+- **Menu** on its own saves and quits to DSlot (acted on at release); **Menu + R / L** quick save / load;
   **Menu + Select** fast-forward while held (2× to 8×, a setting; audio sped up then muted
   above 2×). X and Y are free (optional turbo A/B).
 - **Brightness and volume** are not the emulator's business while playing: Menu + volume
@@ -542,6 +541,9 @@ suite.
 10. Bottom screen: menu, states with thumbnails, looks, options with levels; nibkit adopted.
 11. DSlot description, PKGBUILD, device tests with the user's games, docs (README, using,
     architecture, accuracy), benchmarks.
+
+Changed in play-testing: the design had Back and Menu the other way round. They now follow
+the rest of the DS+ (DSlot's docs/emulators.md): Back is the program's menu, Menu goes home.
 
 ## Later
 

@@ -7,11 +7,17 @@
 //! | `<ROM name>.sav` | Battery RAM, raw: the format other tools read. |
 //! | `<ROM name>.rtc` | The MBC3 clock (`Cartridge::rtc_save`). |
 //! | `<ROM name>.state1` .. `.state6`, `.auto.state` | Save states, each with its picture. |
+//! | `<ROM name>.auto-dmg.state`, `.auto-cgb.state` | The resume state of the other console, kept aside. |
+//!
+//! A DMG game runs on a DMG or a CGB by its look, and a state made on one won't load on the other.
+//! When the look changes the console, the resume state of the old one is kept aside, so the game
+//! starts again on the new one without losing the old; changing back resumes it.
 //!
 //! Files are written by a thread of their own, so a slow card never holds up a frame, and
 //! atomically (a temporary file, synced, then renamed over the old one), so a crash or a flat
 //! battery leaves the previous save rather than half of a new one.
 
+use inkdot_core::{GameBoy, Model};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{channel, Sender};
 use std::thread::JoinHandle;
@@ -52,6 +58,36 @@ impl SaveFiles {
 
     pub fn clock(&self) -> PathBuf {
         self.file("rtc")
+    }
+
+    /// The resume state made on `model` kept aside, when the other model's is the latest.
+    pub fn aside(&self, model: Model) -> PathBuf {
+        self.file(match model {
+            Model::Dmg => "auto-dmg.state",
+            Model::Cgb => "auto-cgb.state",
+        })
+    }
+
+    /// Where to resume on `model`: the latest resume state if made on it, else the one kept
+    /// aside for it.
+    pub fn resume(&self, model: Model) -> Option<Slot> {
+        [self.state(0), self.aside(model)]
+            .iter()
+            .filter_map(|p| Slot::read(p))
+            .find(|s| GameBoy::state_model(&s.machine) == Some(model))
+    }
+
+    /// Before a new resume state made on `model` is written: the latest, if made on the other
+    /// model, is kept aside for it; the one aside for `model` is replaced by the new one.
+    pub fn make_way(&self, model: Model) {
+        let latest = self.state(0);
+        if let Some(other) = Slot::read(&latest)
+            .and_then(|s| GameBoy::state_model(&s.machine))
+            .filter(|&m| m != model)
+        {
+            let _ = std::fs::rename(&latest, self.aside(other));
+        }
+        let _ = std::fs::remove_file(self.aside(model));
     }
 
     /// Slot 0 is the automatic one, written on leaving the game.
@@ -199,6 +235,43 @@ mod tests {
         let d = std::env::temp_dir().join(format!("inkdot-test-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&d);
         d
+    }
+
+    /// The look changed a DMG game from a CGB to a DMG and back (Prehistorik Man, from DSlot):
+    /// neither console's resume state is lost, and each resumes on its own console.
+    #[test]
+    fn a_resume_state_per_console() {
+        let dir = temp("per-model");
+        std::fs::create_dir_all(&dir).unwrap();
+        let f = SaveFiles::new(dir.clone(), "Prehistorik Man");
+        let slot = |cgb: u8, played: u64| Slot {
+            made: 0,
+            played,
+            png: Vec::new(),
+            machine: [b"INKDOT\0\0\x01\x00".as_slice(), &[cgb, 0]].concat(),
+        };
+        let write = |model, s: Slot| {
+            f.make_way(model);
+            std::fs::write(f.state(0), s.encode()).unwrap();
+        };
+        write(Model::Cgb, slot(1, 10));
+        assert_eq!(f.resume(Model::Cgb).map(|s| s.played), Some(10));
+        assert!(f.resume(Model::Dmg).is_none(), "a fresh start on the DMG");
+        write(Model::Dmg, slot(0, 20));
+        assert_eq!(f.resume(Model::Dmg).map(|s| s.played), Some(20));
+        assert_eq!(
+            f.resume(Model::Cgb).map(|s| s.played),
+            Some(10),
+            "kept aside"
+        );
+        write(Model::Cgb, slot(1, 30));
+        assert_eq!(f.resume(Model::Cgb).map(|s| s.played), Some(30));
+        assert_eq!(f.resume(Model::Dmg).map(|s| s.played), Some(20));
+        assert!(
+            !f.aside(Model::Cgb).exists(),
+            "the old CGB state is replaced"
+        );
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

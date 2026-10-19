@@ -169,6 +169,11 @@ impl GameBoy {
         state::encode(self.identity(), &sections)
     }
 
+    /// The model a state was made on, without loading it (`None`: not a state).
+    pub fn state_model(data: &[u8]) -> Option<Model> {
+        state::made_on_cgb(data).map(|cgb| if cgb { Model::Cgb } else { Model::Dmg })
+    }
+
     /// Restores a save state made by [`GameBoy::save_state`] for this game and console. On an
     /// error the machine is left as it was.
     pub fn load_state(&mut self, data: &[u8]) -> Result<(), StateError> {

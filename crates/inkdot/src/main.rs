@@ -223,6 +223,12 @@ fn run(args: args::Args) -> Result<(), String> {
         args::ModelChoice::Auto if console == "GBC" || look == Look::Color => Console::Cgb,
         args::ModelChoice::Auto => Console::Dmg,
     };
+    let (look_value, look_from) = options.get("look");
+    eprintln!(
+        "inkdot: {stem} ({console}) on a {model:?}, look {look_value} ({}), settings {}",
+        look_from.label(console),
+        options.settings.file().display()
+    );
     let mut gb = GameBoy::new(rom, model).map_err(|e| e.to_string())?;
     if let Some(boot) = &args.boot_rom {
         let data = std::fs::read(boot).map_err(|e| format!("{}: {e}", boot.display()))?;
@@ -294,7 +300,7 @@ fn run(args: args::Args) -> Result<(), String> {
     app.apply_look();
     // Resume where the game was left, unless told not to.
     if app.options.bool("resume") {
-        if let Some(slot) = Slot::read(&app.files.state(0)) {
+        if let Some(slot) = app.files.resume(model) {
             match app.gb.load_state(&slot.machine) {
                 Ok(()) => app.played_before = slot.played,
                 Err(e) => eprintln!("inkdot: not resuming: {e}"),
@@ -443,10 +449,7 @@ impl App {
             Event::KeyDown {
                 keycode: Some(k), ..
             } => {
-                let name = k.name();
-                if nibkit::input::BACK_KEYCODES.contains(&name.as_str()) || name == "Escape" {
-                    self.quit = true;
-                }
+                self.command(input::key(&k.name()));
             }
             Event::ControllerButtonDown { button, .. } => {
                 let Some(pad) = pad_of(button) else { return };
@@ -491,7 +494,8 @@ impl App {
 
     fn command(&mut self, cmd: Option<Command>) {
         match cmd {
-            Some(Command::Menu) => {
+            Some(Command::Leave) => self.quit = true,
+            Some(Command::PauseMenu) => {
                 if self.ui.menu {
                     self.ui.close_menu();
                 } else {
@@ -647,6 +651,12 @@ impl App {
 
     /// Leaving: the resume state, battery RAM, the screens lit again.
     fn leave(&mut self) {
+        let model = if self.gb.hw.cgb {
+            Console::Cgb
+        } else {
+            Console::Dmg
+        };
+        self.files.make_way(model);
         self.save_slot(0);
         self.save_battery();
         self.wake_bottom();

@@ -8,7 +8,7 @@
 //! | Options | timing, the bottom screen in play, resume, fast-forward speed; brightness, volume |
 //!
 //! Every page is a list of widgets with their places; the same list draws the page, finds what a
-//! finger touched and moves the focus for the D-pad (when the menu is opened with Menu, which
+//! finger touched and moves the focus for the D-pad (when the menu is opened with Back, which
 //! pauses the game). A widget does one [`Action`], which the main loop carries out and answers
 //! by updating the [`Model`].
 
@@ -147,7 +147,7 @@ struct Widget {
 /// The interface's state.
 pub struct Ui {
     pub page: Page,
-    /// Opened with Menu: the game is paused and the D-pad moves the focus.
+    /// Opened with Back: the game is paused and the D-pad moves the focus.
     pub menu: bool,
     states_saving: bool,
     focus: usize,
@@ -186,7 +186,7 @@ impl Ui {
         self.dirty = true;
     }
 
-    /// Opens the menu (Menu pressed): paused, the focus shown.
+    /// Opens the menu (Back pressed): paused, the focus shown.
     pub fn open_menu(&mut self) {
         self.menu = true;
         self.go(Page::Play);
@@ -653,7 +653,7 @@ impl Ui {
         if self.menu && self.page == Page::Play {
             c.text(
                 Rect::new(32, H - 40, W - 64, 32),
-                "Paused · B to play",
+                "Paused · B or Back to play",
                 SMALL,
                 colour::DIM,
                 Align::Centre,

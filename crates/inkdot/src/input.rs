@@ -5,10 +5,14 @@
 //! | A, B, Select, Start, D-pad (or the stick) | the Game Boy's own buttons |
 //! | X, Y | turbo A and turbo B (on 4 frames, off 4) |
 //! | R2 (held) | fast-forward |
-//! | Menu (tapped) | the menu on the bottom screen |
+//! | Back | the menu on the bottom screen (the game pauses); Back again to play |
+//! | Menu (tapped) | save where the game is and leave, back to DSlot's shelf |
 //! | Menu + R, Menu + L | quick save, quick load (the last slot used) |
 //! | Menu + Select | fast-forward on or off |
-//! | Back | save and leave |
+//!
+//! As every program on the DS+ does it: Back opens the program's own menu, Menu goes home
+//! (DSlot's docs/emulators.md: Menu saves the resume state and quits). Menu + volume is nibOS's
+//! brightness shortcut and never arrives.
 //!
 //! On nibOS, Menu arrives only when it is let go of unless another button is pressed with it
 //! (nibos-input holds it back in case it is Menu + volume), so a tap is a press and a release
@@ -39,10 +43,18 @@ pub enum Pad {
 /// What a control asks of the emulator, rather than of the game.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Command {
-    Menu,
+    /// Open the menu on the bottom screen, or close it.
+    PauseMenu,
+    /// Save the resume state and quit.
+    Leave,
     QuickSave,
     QuickLoad,
     ToggleFast,
+}
+
+/// What a key asks for, by SDL's name for it: Back (and Escape, on a computer) the menu.
+pub fn key(name: &str) -> Option<Command> {
+    (nibkit::input::BACK_KEYCODES.contains(&name) || name == "Escape").then_some(Command::PauseMenu)
 }
 
 /// The controls' state.
@@ -87,7 +99,7 @@ impl Controls {
         if pad == Pad::Menu {
             let tap = self.menu_held && !self.menu_combined;
             self.menu_held = false;
-            return tap.then_some(Command::Menu);
+            return tap.then_some(Command::Leave);
         }
         self.held.retain(|&p| p != pad);
         None
@@ -165,11 +177,25 @@ impl Controls {
 mod tests {
     use super::*;
 
+    /// Back opens the menu and a Menu tap leaves, as on the rest of the DS+ (the two were the
+    /// other way round once).
     #[test]
-    fn a_menu_tap_opens_the_menu_and_a_combination_does_not() {
+    fn back_pauses_and_menu_leaves() {
+        for back in nibkit::input::BACK_KEYCODES {
+            assert_eq!(key(back), Some(Command::PauseMenu));
+        }
+        assert_eq!(key("Escape"), Some(Command::PauseMenu));
+        assert_eq!(key("Return"), None);
+        let mut c = Controls::default();
+        assert_eq!(c.press(Pad::Menu), None, "Menu acts on release");
+        assert_eq!(c.release(Pad::Menu), Some(Command::Leave));
+    }
+
+    #[test]
+    fn a_menu_tap_leaves_and_a_combination_does_not() {
         let mut c = Controls::default();
         c.press(Pad::Menu);
-        assert_eq!(c.release(Pad::Menu), Some(Command::Menu));
+        assert_eq!(c.release(Pad::Menu), Some(Command::Leave));
         c.press(Pad::Menu);
         assert_eq!(c.press(Pad::R), Some(Command::QuickSave));
         c.release(Pad::R);

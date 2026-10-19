@@ -155,6 +155,11 @@ pub(crate) struct Identity {
     pub title: [u8; 16],
 }
 
+/// Whether a state was made on a CGB (`None`: not a state).
+pub fn made_on_cgb(data: &[u8]) -> Option<bool> {
+    (data.len() > 11 && &data[..8] == MAGIC).then(|| data[10] != 0)
+}
+
 /// Builds a state from its identity and sections.
 pub(crate) fn encode(id: Identity, sections: &[(&[u8; 4], Vec<u8>)]) -> Vec<u8> {
     let mut out = Vec::new();
