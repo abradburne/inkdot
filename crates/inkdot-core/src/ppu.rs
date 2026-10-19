@@ -21,6 +21,26 @@ pub const WIDTH: usize = 160;
 pub const HEIGHT: usize = 144;
 /// Dots in one line.
 pub const LINE_DOTS: u16 = 456;
+// The line's schedule, in dots from its start. The PPU's internal mode (which drives the STAT
+// interrupt and the memory locks) leads what STAT reports by a few dots; these values are the
+// ones the Mooneye PPU tests pin down to the dot (`intr_2_*_timing`, `hblank_ly_scx_timing`,
+// `lcdon_timing`, `lcdon_write_timing`).
+/// LY shows the new line.
+const LY_AT: u16 = 4;
+/// STAT reports mode 2 (the mode 2 interrupt and the OAM lock come at dot 0).
+const MODE2_READ_AT: u16 = 4;
+/// VRAM is locked for reads ahead of the pixel transfer; writes still go through until mode 3.
+const VRAM_LOCK_AT: u16 = 80;
+/// OAM writes are locked during the scan from here (reads from dot 0)...
+const OAM_WRITE_LOCK_AT: u16 = 4;
+/// ...until the scan ends, and again from mode 3: a write in between goes through (Mooneye
+/// `lcdon_write_timing`).
+const OAM_SCAN_END: u16 = 80;
+/// Pixel transfer starts and STAT reports mode 3.
+const MODE3_AT: u16 = 84;
+/// Turning the LCD on starts line 0 this many dots in: that line is shorter and has no OAM
+/// scan.
+const LCD_ON_DOT: u16 = 8;
 /// Dots in one frame.
 pub const FRAME_DOTS: u32 = 456 * 154;
 
@@ -104,11 +124,23 @@ pub struct Ppu {
     ly: u8,
     /// Dots into the line.
     dot: u16,
-    /// The mode STAT reports (and that decides memory access).
+    /// The mode, as the STAT interrupt line sees it.
     mode: u8,
+    /// The mode STAT reports, a few dots behind `mode` at each change.
+    read_mode: u8,
+    /// The mode 0 interrupt came last dot: STAT reports it and memory unlocks now.
+    hblank_next: bool,
+    oam_lock: bool,
+    vram_lock: bool,
+    oam_write_lock: bool,
+    vram_write_lock: bool,
     /// The STAT interrupt line, whose rising edge requests the interrupt.
     stat_line: bool,
     lyc_match: bool,
+    /// Dots until LY is compared with LYC after a change.
+    compare_in: u8,
+    /// The LY value to compare at the start of the next dot.
+    compare_ly: Option<u8>,
     /// The LCD was turned on this frame: the first line has no OAM scan and the frame isn't
     /// shown.
     first_frame: bool,
@@ -178,8 +210,16 @@ impl Ppu {
             ly: 0,
             dot: 0,
             mode: 0,
+            read_mode: 0,
+            hblank_next: false,
+            oam_lock: false,
+            vram_lock: false,
+            oam_write_lock: false,
+            vram_write_lock: false,
             stat_line: false,
             lyc_match: false,
+            compare_in: 0,
+            compare_ly: None,
             first_frame: false,
             win_y: false,
             win_line: 0,
@@ -217,6 +257,11 @@ impl Ppu {
         self.cgb
     }
 
+    /// The line being drawn and the dot within it, for tests and debuggers.
+    pub fn position(&self) -> (u8, u16) {
+        (self.line, self.dot)
+    }
+
     fn lcd_on(&self) -> bool {
         self.lcdc & 0x80 != 0
     }
@@ -230,6 +275,7 @@ impl Ppu {
         self.ly = 0;
         self.dot = dot;
         self.mode = 1;
+        self.read_mode = 1;
         self.lyc_match = self.lyc == 0;
         self.stat_line = self.compute_stat_line();
     }
@@ -250,12 +296,14 @@ impl Ppu {
     }
 
     fn compute_stat_line(&self) -> bool {
-        if !self.lcd_on() {
-            return false;
-        }
         let s = self.stat;
-        (self.lyc_match && s & 0x40 != 0)
-            || (self.mode == 0 && s & 0x08 != 0)
+        // With the LCD off the comparison clock stops: the LY=LYC flag, and its part of the
+        // interrupt line, keep their last value (Mooneye `stat_lyc_onoff`).
+        let lyc = self.lyc_match && s & 0x40 != 0;
+        if !self.lcd_on() {
+            return lyc;
+        }
+        lyc || (self.mode == 0 && s & 0x08 != 0)
             || (self.mode == 1 && s & 0x10 != 0)
             || (self.mode == 2 && s & 0x20 != 0)
     }
@@ -275,11 +323,11 @@ impl Ppu {
     // CPU access.
 
     fn vram_blocked(&self) -> bool {
-        self.lcd_on() && self.mode == 3
+        self.lcd_on() && self.vram_lock
     }
 
     fn oam_blocked(&self) -> bool {
-        self.lcd_on() && (self.mode == 2 || self.mode == 3)
+        self.lcd_on() && self.oam_lock
     }
 
     /// A CPU read of $8000-$9FFF.
@@ -292,7 +340,7 @@ impl Ppu {
 
     /// A CPU write to $8000-$9FFF.
     pub fn write_vram(&mut self, addr: u16, v: u8) {
-        if !self.vram_blocked() {
+        if !(self.lcd_on() && self.vram_write_lock) {
             self.vram[(self.vbk as usize) << 13 | (addr as usize & 0x1fff)] = v;
         }
     }
@@ -307,7 +355,7 @@ impl Ppu {
 
     /// A CPU write to $FE00-$FE9F.
     pub fn write_oam(&mut self, addr: u16, v: u8) {
-        if !self.oam_blocked() {
+        if !(self.lcd_on() && self.oam_write_lock) {
             self.oam[addr as usize & 0xff] = v;
         }
     }
@@ -322,7 +370,7 @@ impl Ppu {
         match addr {
             0xff40 => self.lcdc,
             0xff41 => {
-                let mode = if self.lcd_on() { self.mode } else { 0 };
+                let mode = if self.lcd_on() { self.read_mode } else { 0 };
                 0x80 | self.stat | (self.lyc_match as u8) << 2 | mode
             }
             0xff42 => self.scy,
@@ -429,7 +477,7 @@ impl Ppu {
         self.line = 0;
         self.ly = 0;
         self.dot = 0;
-        self.mode = 0;
+        self.unlock();
         self.in_window = false;
         // The screen goes blank: white on a DMG, white on a CGB too.
         let white = if self.cgb { 0x7fff } else { 0 };
@@ -439,14 +487,27 @@ impl Ppu {
     fn turn_on(&mut self) {
         self.line = 0;
         self.ly = 0;
-        self.dot = 0;
+        self.dot = LCD_ON_DOT;
         // The first line after the LCD comes on has no OAM scan: it reads as mode 0 until
-        // mode 3 (Mooneye `lcdon_timing`).
-        self.mode = 0;
+        // mode 3, and nothing is locked until then (Mooneye `lcdon_timing`).
+        self.unlock();
         self.first_frame = true;
-        self.win_y = false;
+        self.win_y = self.wy == 0;
         self.win_line = 0;
+        self.n_sprites = 0;
         self.lyc_match = self.lyc == 0;
+        self.compare_in = 0;
+        self.compare_ly = None;
+    }
+
+    fn unlock(&mut self) {
+        self.mode = 0;
+        self.read_mode = 0;
+        self.hblank_next = false;
+        self.oam_lock = false;
+        self.vram_lock = false;
+        self.oam_write_lock = false;
+        self.vram_write_lock = false;
     }
 
     /// Runs `dots` dots, returning the [`event`]s raised.
@@ -465,57 +526,102 @@ impl Ppu {
         let mut ev = 0;
         let line = self.line;
         let d = self.dot;
+        if self.hblank_next {
+            self.hblank_next = false;
+            self.read_mode = 0;
+            self.oam_lock = false;
+            self.vram_lock = false;
+            self.oam_write_lock = false;
+            self.vram_write_lock = false;
+        }
         if line < 144 {
+            let scan = !self.first_line_after_on();
             if d == 0 {
                 self.start_line();
             }
-            if d < 80 {
-                if d & 1 == 1 && !self.first_line_after_on() {
+            if scan {
+                if d < 80 && d & 1 == 1 {
                     self.scan_entry((d / 2) as usize);
                 }
-            } else if d == 80 {
+                if d == MODE2_READ_AT {
+                    self.read_mode = 2;
+                }
+                if d == OAM_WRITE_LOCK_AT {
+                    self.oam_write_lock = true;
+                }
+                if d == OAM_SCAN_END {
+                    self.oam_write_lock = false;
+                }
+                if d == VRAM_LOCK_AT {
+                    self.vram_lock = true;
+                }
+            }
+            if d == MODE3_AT {
                 self.mode = 3;
+                self.read_mode = 3;
+                self.oam_lock = true;
+                self.vram_lock = true;
+                self.oam_write_lock = true;
+                self.vram_write_lock = true;
                 self.start_mode3();
             }
             if self.mode == 3 {
                 self.mode3_dot();
                 if self.lx == WIDTH as u8 {
                     self.mode = 0;
+                    self.hblank_next = true;
                     if self.in_window {
                         self.win_line = self.win_line.wrapping_add(1);
                     }
                     ev |= event::HBLANK;
                 }
             }
-        } else if line == 144 && d == 0 {
-            self.mode = 1;
-            ev |= event::VBLANK;
-            if self.first_frame {
-                self.first_frame = false;
-            } else {
-                core::mem::swap(&mut self.frame, &mut self.back);
-            }
-            self.win_y = false;
-            self.win_line = 0;
-            // Entering VBlank also raises the mode 2 condition for a moment (Mooneye
-            // `vblank_stat_intr`).
-            if self.stat & 0x20 != 0 && !self.stat_line {
-                ev |= event::STAT;
-                self.stat_line = true;
+        } else if line == 144 {
+            if d == 0 {
+                self.mode = 1;
+                ev |= event::VBLANK;
+                if self.first_frame {
+                    self.first_frame = false;
+                } else {
+                    core::mem::swap(&mut self.frame, &mut self.back);
+                }
+                self.win_y = false;
+                self.win_line = 0;
+                // Entering VBlank also raises the mode 2 condition for a moment (Mooneye
+                // `vblank_stat_intr`).
+                if self.stat & 0x20 != 0 && !self.stat_line {
+                    ev |= event::STAT;
+                    self.stat_line = true;
+                }
+            } else if d == MODE2_READ_AT {
+                self.read_mode = 1;
             }
         }
         self.dot += 1;
         if self.dot == LINE_DOTS {
             self.dot = 0;
             self.line = if self.line == 153 { 0 } else { self.line + 1 };
-            self.ly = self.line;
-        } else if self.line == 153 && self.dot == 4 {
-            // LY reads 0 for nearly all of line 153.
-            self.ly = 0;
         }
-        let lyc_match = self.ly == self.lyc;
-        if lyc_match != self.lyc_match {
-            self.lyc_match = lyc_match;
+        // When LY changes, the LY=LYC flag drops and is compared again 4 dots later. Line 153
+        // changes LY twice: to 153, then to 0 for the rest of the line.
+        if let Some(value) = self.compare_ly.take() {
+            self.lyc_match = value == self.lyc;
+        }
+        let new_ly = match (self.line, self.dot) {
+            (_, LY_AT) => Some(self.line),
+            (153, d) if d == LY_AT + 4 => Some(0),
+            _ => None,
+        };
+        if let Some(ly) = new_ly.filter(|&ly| ly != self.ly) {
+            self.ly = ly;
+            self.lyc_match = false;
+            self.compare_in = 4;
+        }
+        if self.compare_in > 0 {
+            self.compare_in -= 1;
+            if self.compare_in == 0 {
+                self.compare_ly = Some(self.ly);
+            }
         }
         ev | self.update_stat()
     }
@@ -525,7 +631,10 @@ impl Ppu {
     }
 
     fn start_line(&mut self) {
-        self.mode = if self.first_line_after_on() { 0 } else { 2 };
+        if !self.first_line_after_on() {
+            self.mode = 2;
+            self.oam_lock = true;
+        }
         self.n_sprites = 0;
         if self.wy == self.line {
             self.win_y = true;
@@ -649,23 +758,24 @@ impl Ppu {
 
     /// Pan Docs "OBJ penalty algorithm": 6 dots to fetch the object's tile, plus the wait for
     /// the background fetch of the tile the object's leftmost pixel is in, counted once per
-    /// tile; an object at OAM X 0 always costs 11.
+    /// tile. Objects at OAM X 0 wait as if their pixel began a tile whatever SCX is, so the
+    /// first costs 11 and the others on the line 6 (Mooneye `intr_2_mode0_timing_sprites`).
     fn sprite_penalty(&mut self, s: Sprite) -> u8 {
-        if s.x == 0 {
-            return 11;
-        }
         let pixel = s.x as i32 - 8;
-        let pos = if self.in_window {
-            pixel - (self.wx as i32 - 7)
+        let (tile, offset) = if s.x == 0 {
+            (i32::MIN, 0)
         } else {
-            pixel + (self.scx & 7) as i32
+            let pos = if self.in_window {
+                pixel - (self.wx as i32 - 7)
+            } else {
+                pixel + (self.scx & 7) as i32
+            };
+            (pos.div_euclid(8), pos.rem_euclid(8))
         };
-        let tile = pos.div_euclid(8);
         let mut penalty = 6;
         if self.last_penalty_tile != Some(tile) {
             self.last_penalty_tile = Some(tile);
-            let right = 7 - pos.rem_euclid(8);
-            penalty += (right - 2).max(0) as u8;
+            penalty += (7 - offset - 2).max(0) as u8;
         }
         penalty
     }
@@ -838,57 +948,60 @@ impl Ppu {
 mod tests {
     use super::*;
 
-    /// A PPU with the LCD on at the start of line 0 of a normal (not first) frame.
+    /// A PPU with the LCD on, at the start of line 1 (line 0 after turning on is short and has
+    /// no OAM scan).
     fn running(scx: u8) -> Ppu {
         let mut p = Ppu::new(false, false);
         p.write(0xff40, 0x91);
-        p.first_frame = false;
         p.scx = scx;
+        while p.position() != (1, 0) {
+            p.step();
+        }
         p
     }
 
-    /// Dots from the start of the line until mode 0.
+    /// Dots from the start of mode 3 until the mode 0 interrupt.
     fn mode3_end(p: &mut Ppu) -> u16 {
-        while p.mode != 0 || p.dot < 80 {
+        while p.mode != 0 || p.dot <= MODE3_AT {
             p.step();
         }
-        p.dot
+        p.dot - MODE3_AT
     }
 
     #[test]
     fn mode3_is_172_dots_plus_scx_fine_scroll() {
         for scx in 0..8 {
             let mut p = running(scx);
-            assert_eq!(mode3_end(&mut p) - 80, 172 + scx as u16, "scx {scx}");
+            assert_eq!(mode3_end(&mut p), 172 + scx as u16, "scx {scx}");
         }
     }
 
     #[test]
     fn an_object_costs_its_penalty() {
-        // One 8x8 object at X 8 on line 0, SCX 0: 6 dots plus 5 waiting for the first tile.
+        // One 8x8 object at X 8 on line 1, SCX 0: 6 dots plus 5 waiting for the first tile.
         let mut p = running(0);
-        p.oam[0] = 16;
+        p.oam[0] = 17;
         p.oam[1] = 8;
         p.write(0xff40, 0x93);
-        assert_eq!(mode3_end(&mut p) - 80, 172 + 11);
+        assert_eq!(mode3_end(&mut p), 172 + 11);
     }
 
     #[test]
     fn an_object_at_x_zero_costs_eleven() {
         let mut p = running(3);
-        p.oam[0] = 16;
+        p.oam[0] = 17;
         p.oam[1] = 0;
         p.write(0xff40, 0x93);
-        assert_eq!(mode3_end(&mut p) - 80, 172 + 3 + 11);
+        assert_eq!(mode3_end(&mut p), 172 + 3 + 11);
     }
 
     #[test]
     fn the_window_costs_six_dots() {
         let mut p = running(0);
-        p.wy = 0;
+        p.wy = 1;
         p.wx = 7 + 80;
         p.write(0xff40, 0xb1);
-        assert_eq!(mode3_end(&mut p) - 80, 172 + 6);
+        assert_eq!(mode3_end(&mut p), 172 + 6);
     }
 
     #[test]
@@ -900,6 +1013,6 @@ mod tests {
                 vblanks += 1;
             }
         }
-        assert_eq!((vblanks, p.line, p.dot), (1, 0, 0));
+        assert_eq!((vblanks, p.line, p.dot), (1, 1, 0));
     }
 }

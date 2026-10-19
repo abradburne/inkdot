@@ -151,6 +151,15 @@ impl Hardware {
 
     /// One M-cycle of everything but the CPU.
     fn tick(&mut self) {
+        self.tick_devices();
+        self.tick_timer();
+    }
+
+    /// The system counter and what it clocks (the timer, serial). In each M-cycle it counts on
+    /// after the CPU's access: a write to TAC or DIV acts on the counter as it was before the
+    /// cycle's increment (Mooneye `rapid_toggle`), and TIMA's reload lands at the end of the
+    /// cycle after an overflow.
+    fn tick_timer(&mut self) {
         let before = self.timer.counter;
         if self.timer.tick() {
             self.if_ |= 4;
@@ -158,6 +167,10 @@ impl Hardware {
         if self.serial.tick(before, self.timer.counter, self.cgb_mode) {
             self.if_ |= 8;
         }
+    }
+
+    /// One M-cycle of the parts that change before the CPU's access in it.
+    fn tick_devices(&mut self) {
         self.tick_dma();
         let dots = if self.double_speed { 2 } else { 4 };
         let ev = self.ppu.tick(dots);
@@ -247,13 +260,14 @@ impl Hardware {
         }
     }
 
-    /// One M-cycle on the bus: the machine advances, then any HBlank DMA block due is copied
-    /// (stalling the CPU) before the access.
-    fn cycle(&mut self) {
-        self.tick();
+    /// The start of an M-cycle on the bus: any HBlank DMA block due is copied first (stalling
+    /// the CPU), then the machine advances up to the access; [`Hardware::tick_timer`] finishes
+    /// the cycle after it.
+    fn cycle_start(&mut self) {
         if self.hdma.block_due && !self.cpu_halted {
             self.run_hdma_block();
         }
+        self.tick_devices();
     }
 
     fn read_io(&self, addr: u16) -> u8 {
@@ -417,17 +431,21 @@ impl Hardware {
 
 impl Bus for Hardware {
     fn read(&mut self, addr: u16) -> u8 {
-        self.cycle();
-        self.read_mem(addr)
+        self.cycle_start();
+        let v = self.read_mem(addr);
+        self.tick_timer();
+        v
     }
 
     fn write(&mut self, addr: u16, value: u8) {
-        self.cycle();
+        self.cycle_start();
         self.write_mem(addr, value);
+        self.tick_timer();
     }
 
     fn idle(&mut self, _addr: u16) {
-        self.cycle();
+        self.cycle_start();
+        self.tick_timer();
     }
 
     fn interrupts(&self) -> u8 {
