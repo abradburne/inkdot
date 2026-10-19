@@ -1,0 +1,42 @@
+# Into play. Start pressed every 3 s from frame 240.
+# rom: Bubble Bobble (USA, Europe).gb
+# model: dmg
+# check: 3600 b52857cca03f267e
+240 start
+246 -
+420 start
+426 -
+600 start
+606 -
+780 start
+786 -
+960 start
+966 -
+1140 start
+1146 -
+1320 start
+1326 -
+1500 start
+1506 -
+1680 start
+1686 -
+1860 start
+1866 -
+2040 start
+2046 -
+2220 start
+2226 -
+2400 start
+2406 -
+2580 start
+2586 -
+2760 start
+2766 -
+2940 start
+2946 -
+3120 start
+3126 -
+3300 start
+3306 -
+3480 start
+3486 -

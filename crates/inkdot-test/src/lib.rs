@@ -568,3 +568,115 @@ pub fn accuracy_report() -> String {
     }
     out
 }
+
+/// What buttons are held from which frame on: lines of `FRAME BUTTONS`, buttons joined by `+`
+/// (`a`, `b`, `select`, `start`, `up`, `down`, `left`, `right`) or `-` for none; `#` starts a
+/// comment. Used to drive a game headless (`inkdot-test --play`).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Script(pub Vec<(u64, u8)>);
+
+impl Script {
+    /// Reads a script; an unknown button or a line without a frame number is an error.
+    pub fn parse(text: &str) -> Result<Script, String> {
+        let mut steps = Vec::new();
+        for (n, line) in text.lines().enumerate() {
+            let line = line.split('#').next().unwrap_or("").trim();
+            if line.is_empty() {
+                continue;
+            }
+            let mut words = line.split_whitespace();
+            let frame = words
+                .next()
+                .and_then(|w| w.parse::<u64>().ok())
+                .ok_or(format!("line {}: a frame number first", n + 1))?;
+            let mut buttons = 0;
+            for name in words.next().unwrap_or("-").split('+') {
+                use inkdot_core::hw::button::*;
+                buttons |= match name {
+                    "-" => 0,
+                    "a" => A,
+                    "b" => B,
+                    "select" => SELECT,
+                    "start" => START,
+                    "up" => UP,
+                    "down" => DOWN,
+                    "left" => LEFT,
+                    "right" => RIGHT,
+                    other => return Err(format!("line {}: no button {other}", n + 1)),
+                };
+            }
+            steps.push((frame, buttons));
+        }
+        steps.sort_by_key(|s| s.0);
+        Ok(Script(steps))
+    }
+
+    /// The buttons held at a frame.
+    pub fn at(&self, frame: u64) -> u8 {
+        self.0
+            .iter()
+            .take_while(|(f, _)| *f <= frame)
+            .last()
+            .map_or(0, |s| s.1)
+    }
+}
+
+/// A frame's picture as a number (FNV-1a over the PPU's output), to compare runs.
+pub fn frame_hash(gb: &GameBoy) -> u64 {
+    gb.frame().iter().fold(0xcbf2_9ce4_8422_2325, |h, &p| {
+        (h ^ p as u64).wrapping_mul(0x100_0000_01b3)
+    })
+}
+
+/// Plays `frames` frames with the script's buttons, calling `each` after every frame.
+pub fn play(gb: &mut GameBoy, script: &Script, frames: u64, mut each: impl FnMut(u64, &GameBoy)) {
+    let mut audio = Vec::new();
+    for f in 0..frames {
+        gb.set_buttons(script.at(f));
+        gb.run_frame();
+        audio.clear();
+        gb.take_audio(&mut audio);
+        each(f, gb);
+    }
+}
+
+/// Checks a capture of the top screen (`w` wide) against the frame the core made: each Game
+/// Boy pixel must be a 5×5 square at the picture's place, uniform inside its 4×4, with its gap
+/// (the last column and the bottom row) uniform too, and the same Game Boy colour must look the
+/// same everywhere, the right edge included. Returns what is wrong, the first few of each kind.
+pub fn check_shot(rgb: &[[u8; 3]], w: usize, frame: &[u16]) -> Vec<String> {
+    const X0: usize = 112;
+    const Y0: usize = 24;
+    let px = |x: usize, y: usize| rgb[y * w + x];
+    let mut wrong = Vec::new();
+    let mut seen = std::collections::HashMap::new();
+    for gy in 0..144 {
+        for gx in 0..160 {
+            let (x0, y0) = (X0 + gx * 5, Y0 + gy * 5);
+            let inside = px(x0, y0);
+            let gap = px(x0 + 4, y0);
+            for dy in 0..5 {
+                for dx in 0..5 {
+                    let want = if dx == 4 || dy == 4 { gap } else { inside };
+                    if px(x0 + dx, y0 + dy) != want && wrong.len() < 20 {
+                        wrong.push(format!(
+                            "pixel ({gx},{gy}): panel ({},{}) is {:?}, not {want:?}",
+                            x0 + dx,
+                            y0 + dy,
+                            px(x0 + dx, y0 + dy)
+                        ));
+                    }
+                }
+            }
+            let value = frame[gy * 160 + gx];
+            match seen.get(&value) {
+                Some(&(c, at)) if c != inside && wrong.len() < 40 => wrong.push(format!(
+                    "pixel ({gx},{gy}) is {inside:?} but the same colour at {at:?} is {c:?}"
+                )),
+                Some(_) => {}
+                None => drop(seen.insert(value, (inside, (gx, gy)))),
+            }
+        }
+    }
+    wrong
+}

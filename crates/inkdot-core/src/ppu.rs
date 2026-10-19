@@ -27,6 +27,10 @@ pub const LINE_DOTS: u16 = 456;
 // `lcdon_timing`, `lcdon_write_timing`).
 /// LY shows the new line.
 const LY_AT: u16 = 4;
+/// Line 153 shows LY = 153 only briefly, then 0 for the rest of the line (Pan Docs, "LY"): it
+/// changes to 0 the dot after LY=LYC was compared with 153, so a match with LYC = 153 is seen and
+/// raises its STAT interrupt (Prehistorik Man waits for it after its title and hung without).
+const LY_153_ZERO_AT: u16 = LY_AT + 5;
 /// STAT reports mode 2 (the mode 2 interrupt and the OAM lock come at dot 0).
 const MODE2_READ_AT: u16 = 4;
 /// VRAM is locked for reads ahead of the pixel transfer; writes still go through until mode 3.
@@ -582,7 +586,11 @@ impl Ppu {
     /// and the first ones of the next always go through [`Ppu::step`].
     fn idle_dots(&self) -> u16 {
         let d = self.dot;
-        if self.hblank_next || self.compare_in > 0 || self.compare_ly.is_some() || d <= LY_AT + 4 {
+        if self.hblank_next
+            || self.compare_in > 0
+            || self.compare_ly.is_some()
+            || d <= LY_153_ZERO_AT
+        {
             return 0;
         }
         let last = LINE_DOTS - 1;
@@ -641,7 +649,7 @@ impl Ppu {
             self.idle_end = 0;
             self.line = if self.line == 153 { 0 } else { self.line + 1 };
         }
-        if self.dot <= LY_AT + 4 || self.compare_in > 0 || self.compare_ly.is_some() {
+        if self.dot <= LY_153_ZERO_AT || self.compare_in > 0 || self.compare_ly.is_some() {
             self.ly_dot();
             changed = true;
         }
@@ -719,15 +727,15 @@ impl Ppu {
     }
 
     /// LY and the LY=LYC comparison, near the start of a line. When LY changes, the flag drops
-    /// and is compared again 4 dots later; line 153 changes LY twice, to 153 and then to 0 for
-    /// the rest of the line.
+    /// and is compared again 4 dots later; line 153 changes LY twice, to 153 and then, once that
+    /// has been compared, to 0 for the rest of the line.
     fn ly_dot(&mut self) {
         if let Some(value) = self.compare_ly.take() {
             self.lyc_match = value == self.lyc;
         }
         let new_ly = match (self.line, self.dot) {
             (_, LY_AT) => Some(self.line),
-            (153, d) if d == LY_AT + 4 => Some(0),
+            (153, LY_153_ZERO_AT) => Some(0),
             _ => None,
         };
         if let Some(ly) = new_ly.filter(|&ly| ly != self.ly) {

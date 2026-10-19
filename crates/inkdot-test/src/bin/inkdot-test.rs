@@ -5,6 +5,13 @@
 //! `--accuracy FILE` runs every suite and writes the results as Markdown (docs/accuracy.md).
 //! `--bench` runs each ROM for 3600 frames as fast as it can and reports frames per second and
 //! the time per frame.
+//!
+//! `--play SCRIPT --frames N [--every K] [--shots DIR]` plays the first ROM with a button script
+//! (see [`inkdot_test::Script`]) and every K frames (60) prints the frame's hash, PC, LY, IE/IF and
+//! the CPU's mode, and with `--shots` writes the picture: to see where a game stops.
+//!
+//! `--check-shot PNG [--frames N]` runs the ROM N frames (600) and checks a capture of inkdot's
+//! top screen (INKDOT_DEBUG=shot, taken at frame 600) against it ([`inkdot_test::check_shot`]).
 
 use inkdot_core::Model;
 use inkdot_test::{boot, run, Outcome, Protocol};
@@ -32,7 +39,11 @@ fn main() {
         .enumerate()
         .filter(|(i, a)| {
             !a.starts_with("--")
-                && (*i == 0 || (args[i - 1] != "--break" && args[i - 1] != "--wav"))
+                && (*i == 0
+                    || ![
+                        "--break", "--wav", "--play", "--frames", "--every", "--shots",
+                    ]
+                    .contains(&args[i - 1].as_str()))
         })
         .map(|(_, a)| a)
         .collect();
@@ -49,6 +60,81 @@ fn main() {
             gb.take_audio(&mut samples);
         }
         inkdot_test::write_wav(Path::new(wav), &samples, 48_000);
+        return;
+    }
+    let value = |flag: &str| {
+        args.iter()
+            .position(|a| a == flag)
+            .and_then(|i| args.get(i + 1))
+    };
+    if let Some(shot) = value("--check-shot") {
+        let frames: u64 = value("--frames").map_or(600, |n| n.parse().expect("--frames N"));
+        let (w, _, rgb) = inkdot_test::read_png(Path::new(shot));
+        let mut gb = boot(Path::new(roms[0]), model);
+        for _ in 0..frames {
+            gb.run_frame();
+        }
+        let wrong = inkdot_test::check_shot(&rgb, w as usize, gb.frame());
+        for line in &wrong {
+            println!("{line}");
+        }
+        println!(
+            "{}",
+            if wrong.is_empty() {
+                "capture OK"
+            } else {
+                "capture WRONG"
+            }
+        );
+        std::process::exit(if wrong.is_empty() { 0 } else { 1 });
+    }
+    if let Some(script) = value("--play") {
+        let script = std::fs::read_to_string(script).expect("the script");
+        let script = inkdot_test::Script::parse(&script).expect("a valid script");
+        let frames: u64 = value("--frames").map_or(3600, |n| n.parse().expect("--frames N"));
+        let every: u64 = value("--every").map_or(60, |n| n.parse().expect("--every K"));
+        let shots = value("--shots").map(std::path::PathBuf::from);
+        let mut gb = boot(Path::new(roms[0]), model);
+        inkdot_test::play(&mut gb, &script, frames, |f, gb| {
+            if (f + 1) % every != 0 {
+                return;
+            }
+            let hw = &gb.hw;
+            println!(
+                "frame {:>6} hash {:016x} pc {:04x} ly {:3} lyc {:3} ie {:02x} if {:02x} stat {:02x} lcdc {:02x} {:?} ime {} ei {} buttons {:02x}",
+                f + 1,
+                inkdot_test::frame_hash(gb),
+                gb.cpu.pc,
+                hw.peek(0xff44),
+                hw.peek(0xff45),
+                hw.peek(0xffff),
+                hw.peek(0xff0f),
+                hw.peek(0xff41),
+                hw.peek(0xff40),
+                gb.cpu.mode,
+                gb.cpu.ime,
+                gb.cpu.ei_pending,
+                script.at(f),
+            );
+            if std::env::var_os("INKDOT_DUMP").is_some() {
+                let d: Vec<String> = (0xd4fd..0xd520)
+                    .map(|a| format!("{:02x}", hw.peek(a)))
+                    .collect();
+                println!(
+                    "  d4fd: {} d6ef {:02x} ffaa {:02x}",
+                    d.join(" "),
+                    hw.peek(0xd6ef),
+                    hw.peek(0xffaa)
+                );
+            }
+            if let Some(dir) = &shots {
+                let _ = std::fs::create_dir_all(dir);
+                inkdot_test::write_png(
+                    &inkdot_test::frame_rgb(gb),
+                    &dir.join(format!("{:06}.png", f + 1)),
+                );
+            }
+        });
         return;
     }
     if let Some(out) = args

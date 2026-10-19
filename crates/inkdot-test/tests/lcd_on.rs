@@ -109,3 +109,27 @@ fn oam_and_vram_writes() {
         }
     }
 }
+
+/// LYC = 153 matches on line 153, though LY reads 153 there only for a moment before reading 0
+/// (Pan Docs, "LY"): with the LY=LYC interrupt on, the STAT interrupt is requested once a frame,
+/// in VBlank's last line. Prehistorik Man waits for it after its title, and hung without it.
+#[test]
+fn lyc_153_raises_its_interrupt() {
+    for model in [Model::Dmg, Model::Cgb] {
+        let mut gb = GameBoy::new(vec![0; 0x8000], model).unwrap();
+        gb.hw.write(0xff45, 153);
+        gb.hw.write(0xff41, 0x40);
+        gb.hw.write(0xff0f, 0);
+        let mut seen = Vec::new();
+        // Two frames, an M-cycle at a time (peeks cost no cycles).
+        for _ in 0..2 * 70224 / 4 {
+            gb.hw.idle(0);
+            if gb.hw.peek(0xff0f) & 0x02 != 0 {
+                // Line 153, in VBlank, while LY still reads 153.
+                seen.push((gb.hw.peek(0xff41) & 3, gb.hw.peek(0xff44)));
+                gb.hw.if_ = 0;
+            }
+        }
+        assert_eq!(seen, [(1, 153), (1, 153)], "{model:?}");
+    }
+}
