@@ -52,14 +52,17 @@ pub enum Command {
     ToggleFast,
 }
 
-/// What a key asks for, by SDL's name for it: Back (and Escape, on a computer) the menu.
+/// What a key asks for, by SDL's name for it: the DS+'s Back key, or Escape on a computer
+/// (nibkit's Back), opens the menu.
 pub fn key(name: &str) -> Option<Command> {
-    (nibkit::input::BACK_KEYCODES.contains(&name) || name == "Escape").then_some(Command::PauseMenu)
+    let back = nibkit::input::BACK_KEYCODES.contains(&name)
+        || nibkit::input::keyboard(name) == Some(nibkit::input::Button::Back);
+    back.then_some(Command::PauseMenu)
 }
 
 /// A computer's keyboard as the DS+'s controls (nibkit's map: the arrows, X / Z for A / B, S / A
-/// for X / Y, Q / W for L / R, Return for Start, Right Shift or Backspace for Select), with Tab
-/// held for fast-forward. Escape isn't here: [`key`] makes it the menu, as Back is on the DS+.
+/// for X / Y, Q / W for L / R, Return for Start, Right Shift or Backspace for Select, Home for
+/// Menu), with Tab held for fast-forward. Escape, nibkit's Back, is [`key`]'s: the menu.
 pub fn keyboard_pad(name: &str) -> Option<Pad> {
     use nibkit::input::Button;
     if name == "Tab" {
@@ -78,6 +81,7 @@ pub fn keyboard_pad(name: &str) -> Option<Pad> {
         Button::R => Pad::R,
         Button::Start => Pad::Start,
         Button::Select => Pad::Select,
+        Button::Menu => Pad::Menu,
         _ => return None,
     })
 }
@@ -229,6 +233,7 @@ mod tests {
             "the menu, not Menu (which leaves)"
         );
         assert_eq!(key("Escape"), Some(Command::PauseMenu));
+        assert_eq!(keyboard_pad("Home"), Some(Pad::Menu), "Menu: save and quit");
     }
 
     #[test]

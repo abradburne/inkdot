@@ -27,8 +27,8 @@ resumes there.
 On a computer the window shows both screens, the bottom one under the top; the mouse is a finger
 on it. The keys: the arrows for the D-pad, **X** and **Z** for A and B, **S** and **A** for X and Y,
 **Q** and **W** for L and R, **Return** for Start, **Right Shift** or **Backspace** for Select,
-**Tab** held to fast-forward, and **Escape** for the menu (Back on the DS+). Closing the window
-saves where you are.
+**Tab** held to fast-forward, **Escape** for the menu (Back on the DS+) and **Home** to save and
+quit (Menu on the DS+), as closing the window does.
 
 ## The bottom screen
 
