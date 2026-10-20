@@ -37,7 +37,7 @@ prepare() {
     cp "$_root/packaging/nibos/inkdot.toml" "$srcdir/inkdot/packaging/nibos/"
     # Where Cargo.toml looks for it: ../nibos/sdk/nibkit.
     mkdir -p "$srcdir/nibos/sdk/nibkit"
-    cp -r "$_nibkit"/{Cargo.toml,src,assets,README.md,LICENSE} "$srcdir/nibos/sdk/nibkit/"
+    cp -r "$_nibkit"/{Cargo.toml,build.rs,src,assets,README.md,CHANGELOG.md,LICENSE} "$srcdir/nibos/sdk/nibkit/"
     cd "$srcdir/inkdot"
     cargo fetch --locked --target "$(rustc -vV | sed -n 's/^host: //p')"
 }
