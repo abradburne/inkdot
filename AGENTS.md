@@ -45,8 +45,8 @@ tests' published tables: don't move a dot without a test that says so.
 
 ## On the device
 
-Builds run in the aarch64 build machine (`BUILD_MACHINE`). Take the shared device lock first if
-other sessions use the device; never stop DSlot while a game is being played (`pgrep dsperate`,
+Builds run in the aarch64 build machine (`BUILD_MACHINE`). Take the shared device lock first
+(nibOS's `tools/device-lock.sh take "WHO: WHAT"`, `drop` after, `game` to see if someone is playing); never stop DSlot while a game is being played (`pgrep dsperate`,
 `pgrep inkdot`); start DSlot again after. `tools/run-on-device.sh ROM` does the stopping and
 starting. Follow nibOS's AGENTS.md for screens, input, audio and device settings.
 
