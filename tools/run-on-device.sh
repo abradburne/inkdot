@@ -1,12 +1,14 @@
 #!/bin/bash
 # Builds inkdot in the build machine, copies it and a ROM to the handheld, and runs it on the
-# screens in place of DSlot, its output here. DSlot is started again when it exits (Back,
-# Quit, Ctrl-C here).
+# screens in place of DSlot, its output here. DSlot is started again when it exits (Menu,
+# Save and quit, Ctrl-C here).
 #
 #   tools/run-on-device.sh ROM [-- INKDOT_ARGS...]      ROM: a path on the Mac, or device:/path
 #
-# Refuses while a game is being played on the device. Nothing is installed: the binary goes to
-# /tmp, the saves next to the ROM's copy in /tmp/inkdot-run (or by the device's ROM).
+# Takes the shared device lock (nibOS's tools/device-lock.sh; NIBOS_DIR says where nibOS is,
+# ../nibos by default) and refuses while a game is being played or the device is in use. Nothing
+# is installed: the binary goes to /tmp, the saves next to the ROM's copy in /tmp/inkdot-run (or
+# by the device's ROM).
 set -euo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source-path=SCRIPTDIR source=lib.sh
@@ -30,10 +32,16 @@ else
     saves=/tmp/inkdot-run
 fi
 
-on_device 'pgrep -x dsperate >/dev/null || pgrep -x inkdot >/dev/null' && die "a game is running on the device: try again when it isn't"
+# The shared device lock (nibOS's tools/device-lock.sh): nothing else runs on the device
+# while this does, and it isn't taken from under someone else's game.
+lock="${NIBOS_DIR:-$root/../nibos}/tools/device-lock.sh"
+[ -x "$lock" ] || die "no $lock: set NIBOS_DIR to the nibOS repository"
+"$lock" game >/dev/null 2>&1 && die "a game is running on the device: try again when it isn't"
+"$lock" take "inkdot: run-on-device $(basename "$rom")" || die "the device is in use (above): try again later"
 dslot=$(on_device 'systemctl is-active dslot.service || true')
 restore() {
     [ "$dslot" = active ] && on_device 'sudo systemctl start dslot.service' >/dev/null 2>&1
+    "$lock" drop >/dev/null 2>&1 || true
 }
 trap restore EXIT
 [ "$dslot" = active ] && on_device 'sudo systemctl stop dslot.service'
