@@ -57,6 +57,31 @@ pub fn key(name: &str) -> Option<Command> {
     (nibkit::input::BACK_KEYCODES.contains(&name) || name == "Escape").then_some(Command::PauseMenu)
 }
 
+/// A computer's keyboard as the DS+'s controls (nibkit's map: the arrows, X / Z for A / B, S / A
+/// for X / Y, Q / W for L / R, Return for Start, Right Shift or Backspace for Select), with Tab
+/// held for fast-forward. Escape isn't here: [`key`] makes it the menu, as Back is on the DS+.
+pub fn keyboard_pad(name: &str) -> Option<Pad> {
+    use nibkit::input::Button;
+    if name == "Tab" {
+        return Some(Pad::R2);
+    }
+    Some(match nibkit::input::keyboard(name)? {
+        Button::Up => Pad::Up,
+        Button::Down => Pad::Down,
+        Button::Left => Pad::Left,
+        Button::Right => Pad::Right,
+        Button::A => Pad::A,
+        Button::B => Pad::B,
+        Button::X => Pad::X,
+        Button::Y => Pad::Y,
+        Button::L => Pad::L,
+        Button::R => Pad::R,
+        Button::Start => Pad::Start,
+        Button::Select => Pad::Select,
+        _ => return None,
+    })
+}
+
 /// The controls' state.
 #[derive(Clone, Debug, Default)]
 pub struct Controls {
@@ -189,6 +214,21 @@ mod tests {
         let mut c = Controls::default();
         assert_eq!(c.press(Pad::Menu), None, "Menu acts on release");
         assert_eq!(c.release(Pad::Menu), Some(Command::Leave));
+    }
+
+    #[test]
+    fn a_keyboard_plays_and_escape_is_the_menu() {
+        assert_eq!(keyboard_pad("X"), Some(Pad::A));
+        assert_eq!(keyboard_pad("Z"), Some(Pad::B));
+        assert_eq!(keyboard_pad("Return"), Some(Pad::Start));
+        assert_eq!(keyboard_pad("Left"), Some(Pad::Left));
+        assert_eq!(keyboard_pad("Tab"), Some(Pad::R2));
+        assert_eq!(
+            keyboard_pad("Escape"),
+            None,
+            "the menu, not Menu (which leaves)"
+        );
+        assert_eq!(key("Escape"), Some(Command::PauseMenu));
     }
 
     #[test]

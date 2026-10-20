@@ -500,29 +500,33 @@ impl App {
         match event {
             Event::Quit { .. } => self.quit = true,
             Event::KeyDown {
+                keycode: Some(k),
+                repeat,
+                ..
+            } => {
+                let name = k.name();
+                if let Some(cmd) = input::key(&name) {
+                    self.command(Some(cmd));
+                } else if let (Some(pad), false) = (input::keyboard_pad(&name), repeat) {
+                    self.pad_down(pad);
+                }
+            }
+            Event::KeyUp {
                 keycode: Some(k), ..
             } => {
-                self.command(input::key(&k.name()));
+                if let Some(pad) = input::keyboard_pad(&k.name()) {
+                    self.pad_up(pad);
+                }
             }
             Event::ControllerButtonDown { button, .. } => {
-                let Some(pad) = pad_of(button) else { return };
-                if self.ui.menu {
-                    if let Some(nav) = nav_of(pad) {
-                        let action = self.ui.nav(&self.model, nav);
-                        self.act(action);
-                    }
-                    if pad == Pad::Menu {
-                        self.controls.press(pad);
-                    }
-                    return;
+                if let Some(pad) = pad_of(button) {
+                    self.pad_down(pad);
                 }
-                let cmd = self.controls.press(pad);
-                self.command(cmd);
             }
             Event::ControllerButtonUp { button, .. } => {
-                let Some(pad) = pad_of(button) else { return };
-                let cmd = self.controls.release(pad);
-                self.command(cmd);
+                if let Some(pad) = pad_of(button) {
+                    self.pad_up(pad);
+                }
             }
             Event::ControllerAxisMotion { axis, value, .. } => match axis {
                 Axis::LeftX => self.controls.stick_x(value),
@@ -543,6 +547,27 @@ impl App {
             }
             _ => {}
         }
+    }
+
+    /// A control went down, on the gamepad or the keyboard: the menu's when it is open.
+    fn pad_down(&mut self, pad: Pad) {
+        if self.ui.menu {
+            if let Some(nav) = nav_of(pad) {
+                let action = self.ui.nav(&self.model, nav);
+                self.act(action);
+            }
+            if pad == Pad::Menu {
+                self.controls.press(pad);
+            }
+            return;
+        }
+        let cmd = self.controls.press(pad);
+        self.command(cmd);
+    }
+
+    fn pad_up(&mut self, pad: Pad) {
+        let cmd = self.controls.release(pad);
+        self.command(cmd);
     }
 
     fn command(&mut self, cmd: Option<Command>) {

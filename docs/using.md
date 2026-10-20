@@ -24,6 +24,12 @@ resumes there.
 | Menu + Select | fast-forward on or off |
 | Menu + volume | both screens' brightness (nibOS's own shortcut) |
 
+On a computer the window shows both screens, the bottom one under the top; the mouse is a finger
+on it. The keys: the arrows for the D-pad, **X** and **Z** for A and B, **S** and **A** for X and Y,
+**Q** and **W** for L and R, **Return** for Start, **Right Shift** or **Backspace** for Select,
+**Tab** held to fast-forward, and **Escape** for the menu (Back on the DS+). Closing the window
+saves where you are.
+
 ## The bottom screen
 
 While the game plays the bottom screen is blank. **Back**, or a tap on it, pauses the game and

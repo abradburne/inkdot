@@ -45,8 +45,9 @@ cargo run --release -p inkdot -- path/to/game.gb      # on a computer: both scre
 For the DS+ on nibOS: `tools/run-on-device.sh game.gb` builds in the aarch64 build machine and
 runs it on the handheld in place of DSlot; `packaging/nibos/PKGBUILD` builds the package.
 
-The program is built for one system at a time, by Cargo feature: `nibos` (the default) or
-`stock`. `dslot` adds DSlot's part (its settings file, and a test that its description of inkdot
+The program is built for one system at a time, by Cargo feature: `nibos` (the default),
+`stock`, or `desktop` (a computer: a window, the keyboard and the mouse; chosen anyway on any
+system but Linux). `dslot` adds DSlot's part (its settings file, and a test that its description of inkdot
 matches inkdot's options); without it inkdot keeps its own settings.
 
 For the stock OS, cross-built with [cargo-zigbuild](https://github.com/rust-cross/cargo-zigbuild)
