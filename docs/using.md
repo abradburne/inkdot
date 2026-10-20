@@ -39,7 +39,7 @@ same way.
 | Page | |
 |---|---|
 | **Play** | Resume, Save state, Load state, Fast-forward, Save and quit; and, when the look you chose runs on the other console, starting the game again on it (A, then A again: where you are is saved first) |
-| **States** | The six slots and the resume point as cards: the highlighted one's picture, date and play time on the top screen. A loads; X saves into it (X again to save over a state) |
+| **States** | The six slots as cards, and to the left of slot 1 the resume point (where you last left the game, written on leaving): the highlighted one's picture, date and play time on the top screen. A loads; X saves into a slot (X again to save over a state) |
 | **Game**, **GB** / **GBC** | The options for this game, and for every game of its console |
 | **System** | Both screens' brightness, the volume, and the clock (12- or 24-hour, for every app) |
 

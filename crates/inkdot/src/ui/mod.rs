@@ -187,12 +187,27 @@ enum Confirm {
     SaveOver(usize),
 }
 
-/// The slot on the shelf's place `at`: slots 1-6, then the resume point (0).
-fn slot_at(at: usize) -> usize {
-    if at < 6 {
-        at + 1
+/// Whether there is a resume point (slot 0) to show: it is written when the game is left.
+fn has_resume(m: &Model) -> bool {
+    m.slots.first().is_some_and(|s| s.picture.is_some())
+}
+
+/// The slot at the shelf's place `at`: the resume point (0) first when there is one, then slots
+/// 1-6, as every app's shelf has them.
+fn slot_at(m: &Model, at: usize) -> usize {
+    if has_resume(m) {
+        at
     } else {
-        0
+        at + 1
+    }
+}
+
+/// The shelf's place of a numbered slot (1-6).
+fn place_of(m: &Model, slot: usize) -> usize {
+    if has_resume(m) {
+        slot
+    } else {
+        slot - 1
     }
 }
 
@@ -377,24 +392,26 @@ impl Ui {
     }
 
     fn shelf(&self, m: &Model) -> Shelf {
-        let cards = (0..7)
-            .map(|at| {
-                let slot = slot_at(at);
-                let info = m.slots.get(slot);
-                let label = match (slot, info.filter(|i| i.picture.is_some())) {
-                    (0, _) => "Resume point".to_owned(),
-                    (n, Some(i)) => format!("{n} \u{b7} {}", i.made),
-                    (n, None) => format!("{n}"),
-                };
-                Card {
-                    picture: info.and_then(|i| i.picture.as_ref()).map(|_| slot),
-                    label,
-                }
-            })
-            .collect();
+        // The resume point first, set apart (its picture is slot 0's), then the six slots.
+        let resume = has_resume(m).then(|| Card::resume(Some(0), m.slots[0].made.clone()));
+        let slots = (1..=6).map(|n| {
+            let info = m.slots.get(n).filter(|i| i.picture.is_some());
+            let label = match info {
+                Some(i) => format!("{n} \u{b7} {}", i.made),
+                None => format!("{n}"),
+            };
+            Card::slot(info.map(|_| n), label)
+        });
+        let cards: Vec<Card> = resume.into_iter().chain(slots).collect();
+        let sep = "   \u{b7}   ";
+        let on_resume = cards.get(self.card).is_some_and(|c| c.resume);
         let hint = match self.confirm {
-            Some(Confirm::SaveOver(n)) => format!("X  again to save over slot {n}   \u{b7}   B  resume"),
-            _ => "A  load   \u{b7}   X  save here   \u{b7}   D-pad  browse   \u{b7}   L / R  page   \u{b7}   B  resume".into(),
+            Some(Confirm::SaveOver(n)) => format!("X  again to save over slot {n}{sep}B  resume"),
+            // The resume point is written on leaving: it loads, nothing saves onto it.
+            _ if on_resume => format!("A  load{sep}D-pad  browse{sep}L / R  page{sep}B  resume"),
+            _ => {
+                format!("A  load{sep}X  save here{sep}D-pad  browse{sep}L / R  page{sep}B  resume")
+            }
         };
         Shelf {
             tabs: self.tabs(m),
@@ -508,7 +525,7 @@ impl Ui {
                 c.text(f, s, size, at, anchor, ink)
             };
         if self.page == Page::States {
-            let slot = slot_at(self.card);
+            let slot = slot_at(m, self.card);
             let info = m.slots.get(slot).cloned().unwrap_or_default();
             let name = if slot == 0 {
                 "Resume point".to_owned()
@@ -702,12 +719,16 @@ impl Ui {
     fn effect(&mut self, m: &Model, effect: Option<Effect>, does: &[Does]) -> Option<Action> {
         match effect? {
             Effect::Page(i) => {
+                if PAGES[i] == Page::States {
+                    // Opened on the first numbered slot, past the resume point.
+                    self.card = place_of(m, 1);
+                }
                 self.go(PAGES[i]);
                 None
             }
             Effect::Back => Some(Action::Resume),
             Effect::Card { at, key } => {
-                let slot = slot_at(at);
+                let slot = slot_at(m, at);
                 let used = m.slots.get(slot).is_some_and(|s| s.picture.is_some());
                 match key {
                     Key::A if used => Some(Action::Load(slot)),
@@ -733,7 +754,7 @@ impl Ui {
             Effect::Choose(row) => match does.get(row)? {
                 Does::Resume => Some(Action::Resume),
                 Does::SaveState | Does::LoadState => {
-                    self.card = m.quick_slot.clamp(1, 6) - 1;
+                    self.card = place_of(m, m.quick_slot.clamp(1, 6));
                     self.go(Page::States);
                     None
                 }
@@ -869,7 +890,7 @@ mod tests {
         ui.nav(&m, Nav::Down);
         assert_eq!(ui.nav(&m, Nav::A), None, "Save state opens States");
         assert_eq!(ui.page, Page::States);
-        assert_eq!(slot_at(ui.card), 2, "on the quick slot");
+        assert_eq!(slot_at(&m, ui.card), 2, "on the quick slot");
         // Back on Play, the highlight is where it was (Save state).
         ui.go(Page::Play);
         for _ in 0..2 {
@@ -898,12 +919,24 @@ mod tests {
             matches!(ui.render_top(&m), Some(Some(_))),
             "its picture on the top screen"
         );
-        // The resume point is last: it loads but takes no save.
-        for _ in 0..6 {
-            ui.nav(&m, Nav::Right);
-        }
-        assert_eq!(slot_at(ui.card), 0);
+        // With a resume point it comes first, left of slot 1: it loads but takes no save.
+        let mut m = m;
+        m.slots[0].picture = Some(vec![0; 160 * 144 * 4]);
+        m.slots[0].made = "Today 5:02 PM".into();
+        ui.go(Page::Play);
+        ui.nav(&m, Nav::R);
+        assert_eq!(
+            (ui.page, slot_at(&m, ui.card)),
+            (Page::States, 1),
+            "opens on slot 1"
+        );
+        ui.nav(&m, Nav::Left);
+        assert_eq!(slot_at(&m, ui.card), 0);
         assert_eq!(ui.nav(&m, Nav::X), None);
+        assert_eq!(ui.nav(&m, Nav::A), Some(Action::Load(0)));
+        ui.render(&m);
+        ui.nav(&m, Nav::Right);
+        assert_eq!(ui.nav(&m, Nav::X), Some(Action::Save(1)));
     }
 
     #[test]
