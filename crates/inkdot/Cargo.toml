@@ -27,7 +27,8 @@ libc = "0.2"
 # that the description DSlot reads matches inkdot's options. inkdot runs without DSlot either way.
 [features]
 default = ["nibos"]
-nibos = ["nibkit/nibos"]
+# On nibOS the menu has the Connections page (Wi-Fi, Bluetooth), which needs nibkit's radios.
+nibos = ["nibkit/nibos", "nibkit/net-control"]
 stock = ["nibkit/stock"]
 # A computer: windows, keyboard, mouse (nibkit chooses it anyway on any system but Linux).
 desktop = ["nibkit/desktop"]

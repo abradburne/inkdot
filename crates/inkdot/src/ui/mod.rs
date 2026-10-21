@@ -18,6 +18,36 @@ use nibkit::menu::{
 };
 use nibkit::settings::Value as Setting;
 
+// The Connections page (Wi-Fi, Bluetooth, the paired devices) is nibkit's, on nibOS; elsewhere
+// there are no radios for it, and no page.
+#[cfg(feature = "nibos")]
+use nibkit::menu::connections::{self, Connections};
+#[cfg(not(feature = "nibos"))]
+use no_connections::{self as connections, Connections};
+
+#[cfg(not(feature = "nibos"))]
+mod no_connections {
+    use nibkit::menu::Row;
+    pub const HINT: &str = "";
+    /// Never there: a build without nibOS's radios.
+    pub struct Connections;
+    impl Connections {
+        pub fn start() -> Option<Connections> {
+            None
+        }
+        pub fn refresh(&mut self) {}
+        pub fn title(&self) -> String {
+            String::new()
+        }
+        pub fn rows(&self) -> Vec<Row> {
+            Vec::new()
+        }
+        pub fn act(&mut self, _row: usize) -> bool {
+            false
+        }
+    }
+}
+
 /// The screen's size.
 pub const W: i32 = 1024;
 pub const H: i32 = 768;
@@ -120,6 +150,8 @@ pub enum Page {
     Game,
     Console,
     System,
+    /// Wi-Fi, Bluetooth and the paired devices: after System, where there are radios.
+    Connections,
 }
 
 const PAGES: [Page; 5] = [
@@ -167,7 +199,7 @@ pub struct Ui {
     /// Open (the game paused) or not (the bottom screen blank).
     pub menu: bool,
     /// Each page's highlighted row, and its first row on screen.
-    rows: [(usize, usize); 5],
+    rows: [(usize, usize); 6],
     /// The highlighted card on States: its place on the shelf (slots 1-6, then the resume
     /// point).
     card: usize,
@@ -179,6 +211,10 @@ pub struct Ui {
     dirty: bool,
     /// The top screen's overlay needs drawing again.
     top_dirty: bool,
+    /// The Connections page's state while the menu is open (its worker stops when dropped),
+    /// and what it last showed, to draw it again when that changes.
+    conn: Option<Connections>,
+    conn_seen: Option<(String, Vec<Row>)>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -222,7 +258,7 @@ impl Ui {
         Ui {
             page: Page::Play,
             menu: false,
-            rows: [(0, 0); 5],
+            rows: [(0, 0); 6],
             card: 0,
             confirm: None,
             fonts: Fonts::new(),
@@ -230,6 +266,8 @@ impl Ui {
             top: Canvas::new(1.0),
             dirty: true,
             top_dirty: true,
+            conn: None,
+            conn_seen: None,
         }
     }
 
@@ -245,24 +283,51 @@ impl Ui {
         self.touch_up();
     }
 
+    /// Shows a page by its name (play, states, game, console, system, connections), if it is
+    /// there: for INKDOT_DEBUG=menu.
+    pub fn go_named(&mut self, name: &str) {
+        let page = self
+            .pages()
+            .into_iter()
+            .find(|p| format!("{p:?}").eq_ignore_ascii_case(name));
+        if let Some(page) = page {
+            self.go(page);
+        }
+    }
+
     /// Opens the menu on Play (the game pauses).
     pub fn open_menu(&mut self) {
         self.menu = true;
+        self.conn = Connections::start();
         self.go(Page::Play);
     }
 
     pub fn close_menu(&mut self) {
         self.menu = false;
         self.confirm = None;
+        self.conn = None;
+        self.conn_seen = None;
+        if self.page == Page::Connections {
+            self.page = Page::Play;
+        }
         self.touch_up();
     }
 
+    /// The pages there are: Connections only where there are radios.
+    fn pages(&self) -> Vec<Page> {
+        let mut pages = PAGES.to_vec();
+        if self.conn.is_some() {
+            pages.push(Page::Connections);
+        }
+        pages
+    }
+
     fn index(page: Page) -> usize {
-        PAGES.iter().position(|p| *p == page).unwrap_or(0)
+        PAGES.iter().position(|p| *p == page).unwrap_or(PAGES.len())
     }
 
     fn tabs(&self, m: &Model) -> Vec<(String, bool)> {
-        PAGES
+        self.pages()
             .iter()
             .map(|p| {
                 let name = match p {
@@ -271,6 +336,7 @@ impl Ui {
                     Page::Game => "Game".to_owned(),
                     Page::Console => m.console.clone(),
                     Page::System => "System".to_owned(),
+                    Page::Connections => "Connections".to_owned(),
                 };
                 (name, *p == self.page)
             })
@@ -370,6 +436,13 @@ impl Ui {
                 (rows, "NIBOS".into())
             }
             Page::States => (Vec::new(), String::new()),
+            Page::Connections => match &self.conn {
+                Some(c) => (
+                    c.rows().into_iter().map(|r| (r, Does::Nothing)).collect(),
+                    c.title(),
+                ),
+                None => (Vec::new(), String::new()),
+            },
         }
     }
 
@@ -426,6 +499,7 @@ impl Ui {
         match self.page {
             Page::Play => format!("A  choose{sep}D-pad  move{sep}L / R  page{sep}B  resume"),
             Page::System => format!("D-pad  change{sep}L / R  page{sep}B  resume"),
+            Page::Connections => connections::HINT.into(),
             _ => {
                 let set_here = matches!(
                     menu.rows.get(menu.row).map(|r| &r.value),
@@ -461,6 +535,15 @@ impl Ui {
 
     /// The bottom screen's picture, when it has changed since last asked: blank in play.
     pub fn render(&mut self, m: &Model) -> Option<&[u8]> {
+        // The Connections page follows the radios: drawn again when what it shows changes.
+        if let (true, Page::Connections, Some(c)) = (self.menu, self.page, self.conn.as_mut()) {
+            c.refresh();
+            let now = (c.title(), c.rows());
+            if self.conn_seen.as_ref() != Some(&now) {
+                self.conn_seen = Some(now);
+                self.dirty = true;
+            }
+        }
         if !std::mem::take(&mut self.dirty) {
             return None;
         }
@@ -717,13 +800,25 @@ impl Ui {
 
     /// Carries out what a button or touch said.
     fn effect(&mut self, m: &Model, effect: Option<Effect>, does: &[Does]) -> Option<Action> {
-        match effect? {
+        let effect = effect?;
+        // On Connections a press turns a radio on or off, or connects a device: nibkit's.
+        if let (Page::Connections, Effect::Choose(row) | Effect::Change { row, .. }) =
+            (self.page, effect)
+        {
+            if let Some(c) = self.conn.as_mut() {
+                c.act(row);
+            }
+            self.touch_up();
+            return None;
+        }
+        match effect {
             Effect::Page(i) => {
-                if PAGES[i] == Page::States {
+                let page = *self.pages().get(i)?;
+                if page == Page::States {
                     // Opened on the first numbered slot, past the resume point.
                     self.card = place_of(m, 1);
                 }
-                self.go(PAGES[i]);
+                self.go(page);
                 None
             }
             Effect::Back => Some(Action::Resume),
@@ -996,6 +1091,28 @@ mod tests {
         }
         assert_eq!(ui.nav(&m, Nav::A), None);
         assert_eq!(ui.nav(&m, Nav::A), Some(Action::Restart));
+    }
+
+    /// Connections is a tab only where there are radios to show (nibOS on the handheld); on a
+    /// computer, or the stock OS, the tabs stop at System.
+    #[test]
+    fn connections_only_where_there_are_radios() {
+        let mut ui = Ui::new();
+        let m = model();
+        ui.open_menu();
+        let tabs: Vec<String> = ui.tabs(&m).into_iter().map(|t| t.0).collect();
+        assert_eq!(tabs.contains(&"Connections".to_owned()), ui.conn.is_some());
+        if ui.conn.is_none() {
+            assert_eq!(tabs.len(), 5);
+            ui.nav(&m, Nav::L);
+            assert_eq!(
+                ui.page,
+                Page::System,
+                "round from Play to the last tab, System"
+            );
+        }
+        ui.close_menu();
+        assert!(ui.conn.is_none(), "its worker stops when the menu closes");
     }
 
     #[test]

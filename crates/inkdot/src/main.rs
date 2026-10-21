@@ -77,6 +77,9 @@ struct Debug {
     /// `cycle-looks`: the Look page opened and each look chosen in turn, then the restarts,
     /// through the same actions as taps (to check live changes on the handheld).
     cycle_looks: bool,
+    /// `menu=PAGE`: the menu opened on that page (play, states, game, console, system,
+    /// connections) after a few seconds, for a capture of it.
+    menu: Option<String>,
     latency: bool,
     frames: Option<PathBuf>,
     /// The utilization clamp to ask for in play (of 1024), instead of perf::PLAY.
@@ -95,6 +98,7 @@ impl Debug {
                 _ if part == "stats" => d.stats = true,
                 _ if part == "latency" => d.latency = true,
                 _ if part == "cycle-looks" => d.cycle_looks = true,
+                Some(("menu", page)) => d.menu = Some(page.to_owned()),
                 _ => {}
             }
         }
@@ -940,6 +944,12 @@ impl App {
         self.video.upload_frame(&self.rgba);
         let look = self.lcd_look();
         self.frame_count += 1;
+        if self.frame_count == 150 {
+            if let Some(name) = self.debug.menu.clone() {
+                self.ui.open_menu();
+                self.ui.go_named(&name);
+            }
+        }
         if self.debug.cycle_looks {
             self.cycle_looks();
         }
