@@ -2,9 +2,11 @@
 
 inkdot plays games in `.gb`, `.gbc`, or a `.zip` with one in it. It can be started three ways:
 
-- **From DSlot** (nibOS), for games in `Roms/GB` and `Roms/GBC` on either card.
+- **From DSlot** (nibOS), for games in `Roms/GB` and `Roms/GBC` on either card, or in `Games/GB`
+  and `Games/GBC` on a card set up for slot CFW.
 - **From Apps on the stock OS**: copy the stock zip's `Roms` folder onto the games card. It
-  opens with a list of the games in `Roms/GB` and `Roms/GBC` on both cards.
+  opens with a list of the games in `Roms/GB` and `Roms/GBC` on both cards, and in `Games/GB` and
+  `Games/GBC`. A game in both `Games/` and `Roms/` is listed once.
 - **By hand**: `inkdot game.gbc`, or `inkdot` alone for the list. `inkdot --help` gives the
   options, which are the same as on the menu's Game page (`--look pocket`, `--no-lcd`, `--fast 6`).
 
@@ -84,6 +86,11 @@ Color or a Game Boy by its look, and a resume state made on one can't continue o
 a new look changes the console the game starts again on it, and the old console's resume state is
 kept as `<game>.auto-cgb.state` (or `-dmg`), to resume if the look is changed back. DSlot's **Clear resume state**
 deletes the last.
+
+A game in a slot CFW `Games/GB` or `Games/GBC` folder saves in `Saves/` like any other. The first
+time it starts with no `<game>.sav` there, the `.sav` slot left beside the ROM (`<game>.sav` or
+`<game>.gbc.sav`) is copied in, so the game goes on from where it was in slot. The original is never
+changed or deleted, so slot still has it; from then on the two saves are apart.
 
 ## On the stock OS
 

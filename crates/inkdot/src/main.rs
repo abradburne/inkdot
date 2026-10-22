@@ -260,6 +260,9 @@ fn run(args: args::Args) -> Result<(), String> {
         .clone()
         .unwrap_or_else(|| saves::default_dir(console, &stem));
     let files = SaveFiles::new(dir, &stem);
+    if let Some(from) = files.adopt_slot_save(&path) {
+        eprintln!("inkdot: battery save copied from {}", from.display());
+    }
     if let Some(ram) = files.read_battery() {
         gb.hw.cart.load_ram(&ram);
     }

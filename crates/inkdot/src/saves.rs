@@ -56,6 +56,26 @@ impl SaveFiles {
             .find_map(|p| std::fs::read(p).ok())
     }
 
+    /// A game played from a slot CFW `Games/<system>/` folder, with no battery save here yet:
+    /// the `.sav` slot left beside the ROM (`<ROM name>.sav`, or `<ROM file name>.sav`) is
+    /// copied in, so the game goes on from where it was in slot. The original is left as it is.
+    /// The file copied, if one was.
+    pub fn adopt_slot_save(&self, rom: &Path) -> Option<PathBuf> {
+        let dir = rom.parent()?;
+        if dir.parent()?.file_name()? != "Games" || self.read_battery().is_some() {
+            return None;
+        }
+        let file = rom.file_name()?.to_string_lossy();
+        let from = [format!("{}.sav", self.stem), format!("{file}.sav")]
+            .into_iter()
+            .map(|name| dir.join(name))
+            .find(|p| p.is_file())?;
+        let data = std::fs::read(&from).ok()?;
+        std::fs::create_dir_all(&self.dir).ok()?;
+        write_atomically(&self.battery(), &data).ok()?;
+        Some(from)
+    }
+
     pub fn clock(&self) -> PathBuf {
         self.file("rtc")
     }
@@ -285,6 +305,37 @@ mod tests {
         std::fs::write(dir.join("Zelda.sav"), [3]).unwrap();
         assert_eq!(f.read_battery(), Some(vec![3]));
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// A Games/ game slot CFW played: its `.sav` beside the ROM is copied in on the first start,
+    /// left where it was, and never copied over a save of ours.
+    #[test]
+    fn a_slot_save_is_adopted_once() {
+        let card = temp("slot-sav");
+        let games = card.join("Games/GBC");
+        std::fs::create_dir_all(&games).unwrap();
+        let rom = games.join("Zelda.gbc");
+        std::fs::write(&rom, [0]).unwrap();
+        std::fs::write(games.join("Zelda.sav"), [7, 7]).unwrap();
+        let f = SaveFiles::new(card.join("Saves/GBC/Zelda"), "Zelda");
+        assert_eq!(f.adopt_slot_save(&rom), Some(games.join("Zelda.sav")));
+        assert_eq!(f.read_battery(), Some(vec![7, 7]));
+        assert_eq!(std::fs::read(games.join("Zelda.sav")).unwrap(), [7, 7]);
+        std::fs::write(f.battery(), [1]).unwrap();
+        assert_eq!(f.adopt_slot_save(&rom), None, "ours is kept");
+        assert_eq!(f.read_battery(), Some(vec![1]));
+
+        // `<ROM file name>.sav` too; a ROM outside Games/ adopts nothing.
+        let other = SaveFiles::new(card.join("Saves/GBC/Mole"), "Mole");
+        let mole = games.join("Mole.gbc");
+        std::fs::write(games.join("Mole.gbc.sav"), [2]).unwrap();
+        assert_eq!(other.adopt_slot_save(&mole), Some(games.join("Mole.gbc.sav")));
+        let roms = card.join("Roms/GBC");
+        std::fs::create_dir_all(&roms).unwrap();
+        std::fs::write(roms.join("Kirby.sav"), [3]).unwrap();
+        let kirby = SaveFiles::new(card.join("Saves/GBC/Kirby"), "Kirby");
+        assert_eq!(kirby.adopt_slot_save(&roms.join("Kirby.gbc")), None);
+        std::fs::remove_dir_all(card).unwrap();
     }
 
     #[test]

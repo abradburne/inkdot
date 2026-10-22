@@ -28,7 +28,7 @@ pub fn find(roots: &[PathBuf]) -> Vec<Game> {
             };
             for entry in dir.flatten() {
                 let path = entry.path();
-                if is_game(&path) && path.is_file() {
+                if is_game(&path) && path.is_file() && !nibkit::paths::slot_copy(&path, roots) {
                     games.push(Game {
                         name: crate::rom::stem(&path),
                         path,
@@ -57,7 +57,7 @@ impl Picker {
         let menu = Menu {
             tabs: Vec::new(),
             title: if games.is_empty() {
-                "NO GAMES IN ROMS/GB OR ROMS/GBC ON EITHER CARD".into()
+                "NO GAMES IN ROMS/GB, ROMS/GBC, GAMES/GB OR GAMES/GBC".into()
             } else {
                 "CHOOSE A GAME".into()
             },
