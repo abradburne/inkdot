@@ -49,7 +49,7 @@ fn main() {
         };
     }
     let m = Model {
-        title: "Super Mario Land 2".into(),
+        title: std::env::var("TITLE").unwrap_or("Super Mario Land 2".into()),
         console: "GB".into(),
         clock: "5:05 PM".into(),
         battery: Some(76),

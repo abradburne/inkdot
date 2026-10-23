@@ -291,7 +291,7 @@ fn run(args: args::Args) -> Result<(), String> {
         rom,
         options,
         console,
-        title: stem.clone(),
+        title: nibkit::names::display_name(&stem),
         files,
         writer: Writer::start(),
         video,

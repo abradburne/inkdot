@@ -14,7 +14,7 @@
 
 use nibkit::menu::raster::{Canvas, Fonts};
 use nibkit::menu::{
-    self, colour, layout, Card, Draw, Effect, Key, Menu, Row, Shelf, Slot, Status, Value,
+    self, colour, layout, top, Card, Draw, Effect, Key, Menu, Row, Shelf, Slot, Status, Value,
 };
 use nibkit::settings::Value as Setting;
 
@@ -603,10 +603,6 @@ impl Ui {
         let f = &self.fonts;
         let c = &mut self.top;
         c.clear(colour::BLACK);
-        let text =
-            |c: &mut Canvas, s: &str, size: (f32, bool), at: (f32, f32), anchor: f32, ink| {
-                c.text(f, s, size, at, anchor, ink)
-            };
         if self.page == Page::States {
             let slot = slot_at(m, self.card);
             let info = m.slots.get(slot).cloned().unwrap_or_default();
@@ -615,75 +611,35 @@ impl Ui {
             } else {
                 format!("Slot {slot}")
             };
-            match &info.picture {
-                Some(p) => c.draw(
-                    f,
-                    &[Draw::Picture {
-                        index: 0,
-                        x: 62.0,
-                        y: 104.0,
-                        w: 560.0,
-                        h: 504.0,
-                        faded: false,
-                    }],
-                    |_| Some((&p[..], 160, 144)),
-                ),
-                None => c.draw(
-                    f,
-                    &[Draw::Rect {
-                        x: 62.0,
-                        y: 104.0,
-                        w: 560.0,
-                        h: 504.0,
-                        colour: [21, 24, 30],
-                    }],
-                    |_| None,
-                ),
-            }
-            text(c, &name, (60.0, true), (660.0, 170.0), 0.0, colour::WHITE);
-            if slot != 0 && slot == m.quick_slot {
-                text(
-                    c,
-                    "Quick slot",
-                    (30.0, false),
-                    (660.0, 246.0),
-                    0.0,
-                    colour::DIM,
-                );
-            }
-            if info.picture.is_some() {
-                let played = info.played.trim_end_matches(" played");
-                for (k, (label, value)) in [("Saved", info.made.as_str()), ("Played", played)]
-                    .iter()
-                    .enumerate()
-                {
-                    let y = 340.0 + k as f32 * 40.0;
-                    text(c, label, (26.0, false), (660.0, y), 0.0, colour::DIM);
-                    text(c, value, (26.0, true), (780.0, y), 0.0, colour::WHITE);
-                }
+            let under = if slot != 0 && slot == m.quick_slot {
+                "Quick slot"
             } else {
-                text(c, "Empty", (26.0, false), (660.0, 340.0), 0.0, colour::DIM);
-            }
+                ""
+            };
+            let played = info.played.trim_end_matches(" played");
+            let rows: &[(&str, &str)] = if info.picture.is_some() {
+                &[("Saved", info.made.as_str()), ("Played", played)]
+            } else {
+                &[("Empty", "")]
+            };
+            let width = |s: &str, z, b| f.width(s, z, b);
+            let draws =
+                top::state_measured(&name, under, rows, info.picture.as_ref().map(|_| 0), width);
+            let picture = info.picture.as_deref();
+            c.draw(f, &draws, |_| picture.map(|p| (p, 160, 144)));
             return Some(&c.px);
         }
         if look_row {
             return None;
         }
         // The game dimmed, its name and today's play time over it.
-        text(
-            c,
-            "Paused",
-            (64.0, true),
-            (512.0, 300.0),
-            0.5,
-            colour::WHITE,
-        );
         let sub = if m.played.is_empty() {
             m.title.clone()
         } else {
             format!("{} \u{b7} {}", m.title, m.played)
         };
-        text(c, &sub, (30.0, false), (512.0, 384.0), 0.5, colour::DIM);
+        let draws = top::paused_measured("Paused", &sub, |s, z, b| f.width(s, z, b));
+        c.draw(f, &draws, |_| None);
         // Black behind is a dim (alpha 55%); text keeps its own colour.
         for p in c.px.chunks_exact_mut(4) {
             p[3] = p[0].max(p[1]).max(p[2]).max(140);
