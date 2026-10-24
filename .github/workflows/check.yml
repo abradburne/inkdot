@@ -1,6 +1,7 @@
-# inkdot: `make check` on every push and pull request. Written before the repository had a
-# remote, so it has not run yet; `make check` locally is the reference. The frontend links
-# SDL2 and builds against nibkit from the nibOS repository, checked out beside this one.
+# inkdot: `make check` on every push and pull request: rustfmt, clippy -D warnings and every
+# test (the test ROM suites included, fetched from their releases) for each system inkdot builds
+# for (nibOS, nibOS with DSlot, the stock OS, a computer), and shellcheck. nibkit comes from its
+# own repository, as Cargo.toml says.
 name: check
 
 on:
@@ -15,17 +16,18 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-        with:
-          path: inkdot
-      - uses: actions/checkout@v4
-        with:
-          repository: abradburne/nibos
-          path: nibos
       - name: Tools
         run: |
           sudo apt-get update
           sudo apt-get install -y libsdl2-dev shellcheck unzip
           rustup component add rustfmt clippy
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+            tests/roms
+          key: ${{ runner.os }}-${{ hashFiles('Cargo.lock', 'tools/fetch-test-roms.sh') }}
       - name: make check
-        working-directory: inkdot
         run: make check

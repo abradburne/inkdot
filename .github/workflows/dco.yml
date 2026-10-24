@@ -1,6 +1,5 @@
 # inkdot: every commit a pull request adds carries a Signed-off-by line (the Developer
 # Certificate of Origin, CONTRIBUTING.md). Only the pull request's own commits are checked.
-# Written before the repository had a remote; it has not run yet.
 name: dco
 
 on:

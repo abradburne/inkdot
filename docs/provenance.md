@@ -43,4 +43,4 @@ ours. Its source is never opened. Record here which one, the version, and how it
 | crates.io API, AUR RPC, Arch package search, GitHub search (2026-10-19) | Name collision checks |
 | Roboto Condensed (Google Fonts; built in through nibkit's `menu-raster`) | The menu's text. SIL OFL 1.1 (LICENSE-OFL) |
 | PKWARE APPNOTE.TXT (the zip format's specification) | Reading `.zip` games (`crates/inkdot/src/rom.rs`) |
-| nibkit (`nibos/sdk/nibkit`, our own, MIT) | Screens, vblank, input names, touch, brightness, volume, paths, settings, DSlot's description format |
+| nibkit ([github.com/abradburne/nibkit](https://github.com/abradburne/nibkit), our own, MIT) | Screens, vblank, input names, touch, brightness, volume, paths, settings, DSlot's description format |

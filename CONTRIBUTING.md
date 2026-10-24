@@ -15,6 +15,23 @@ make check
 round trips, the frontend's tests) and shellcheck. Anything that changes what the player sees or
 hears is also tried on the handheld, and the commit says how.
 
+## nibkit
+
+The frontend uses [nibkit](https://github.com/abradburne/nibkit), nibOS's SDK library, as a git
+dependency at a tag. To work on both at once, build against a local checkout with a `[patch]` in
+a Cargo config file *outside* this repository, so no one else's paths end up in it: Cargo reads
+`.cargo/config.toml` in every folder above the one it runs in, so one in the folder that holds
+both checkouts serves every project there.
+
+```toml
+# ../.cargo/config.toml, beside inkdot/ and nibkit/
+[patch."https://github.com/abradburne/nibkit"]
+nibkit = { path = "nibkit" }
+```
+
+Cargo then records the local nibkit in `Cargo.lock`; don't commit that change. The PKGBUILD does
+the same with `NIBKIT=path/to/nibkit makepkg ...`.
+
 ## The clean room
 
 The first rule (see [AGENTS.md](AGENTS.md)): no other emulator's source, read or copied, ever.

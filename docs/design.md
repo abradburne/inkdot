@@ -299,7 +299,7 @@ Beyond pass/fail:
 ### Frame pacing: one emulated frame per panel refresh
 
 A Game Boy frame is 70,224 dots at 4,194,304 Hz: **59.7275 Hz**. The DS+ panels run at
-**59.937 Hz** (measured, nibOS [display notes](../../nibos/docs/engineering/display.md)). They
+**59.937 Hz** (measured; nibOS's display notes). They
 can't be made equal (the panels' pixel clock is fixed by VPLL), so there are two ways to run:
 
 - **Panel-locked (default)**: exactly one emulated frame per top-panel refresh. Motion is

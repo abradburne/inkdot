@@ -8,6 +8,10 @@ edition = "2021"
 rust-version = "1.87"
 license = "MIT OR Apache-2.0"
 authors = ["Alan Bradburne"]
+repository = "https://github.com/abradburne/inkdot"
+homepage = "https://github.com/abradburne/inkdot"
+keywords = ["gameboy", "emulator", "gbc", "handheld", "anbernic"]
+categories = ["emulators"]
 
 [workspace.lints.rust]
 missing_docs = "warn"

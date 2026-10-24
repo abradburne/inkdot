@@ -22,7 +22,7 @@ The core passes the test suites that matter for a Game Boy emulator in full:
 | | |
 |---|---|
 | [`crates/inkdot-core`](crates/inkdot-core) | The machine: CPU, picture, sound, timer, cartridges (MBC1/1M/2/3+RTC/5), save states. `no_std`, no dependencies. |
-| [`crates/inkdot`](crates/inkdot) | The program for the DS+: SDL2, GLES, [nibkit](../nibos/sdk/nibkit). |
+| [`crates/inkdot`](crates/inkdot) | The program for the DS+: SDL2, GLES, [nibkit](https://github.com/abradburne/nibkit). |
 | [`crates/inkdot-test`](crates/inkdot-test) | Runs the core headless: the test suites, benchmarks, sound to WAV. |
 | [`packaging/nibos`](packaging/nibos) | The PKGBUILD and the description DSlot reads. |
 | [`packaging/stock`](packaging/stock) | The stock OS's Apps script, and the script that builds its zip. |

@@ -20,3 +20,10 @@ The first version.
   own settings file and saves folders.
 - **Stock OS**: an Apps script and a zip for the games card (`--features stock`): one window
   across both panels, 44.1 kHz sound, the stock paths.
+- **Slot CFW cards**: games in `Games/GB` and `Games/GBC` too, listed once when also in `Roms/`;
+  a `.sav` slot left beside the ROM is copied into the saves folder on the first start, the
+  original untouched.
+- **Menu**: DSlot's design, shared through nibkit: save-state cards with a resume tile, options
+  that say where their value comes from, a Connections page on nibOS, and long game names that
+  wrap and shrink on the top screen.
+- **Desktop**: `--features desktop`, both screens in one window, the keyboard as the controls.

@@ -6,12 +6,17 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
 
 [dependencies]
 inkdot-core = { path = "../inkdot-core" }
-# nibOS's SDK library (sdk/nibkit in the nibOS repository, MIT): the screens, vblank, buttons,
-# touch, brightness, paths, settings and DSlot's description format.
-nibkit = { version = "0.1", path = "../../../nibos/sdk/nibkit", default-features = false, features = ["menu-raster"] }
+# nibOS's SDK library (github.com/abradburne/nibkit, MIT): the screens, vblank, buttons, touch,
+# brightness, paths, settings, the menu and DSlot's description format. To build against a local
+# checkout, patch it in from outside the repository (CONTRIBUTING.md, "nibkit").
+nibkit = { git = "https://github.com/abradburne/nibkit", tag = "v0.1.0", version = "0.1", default-features = false, features = ["menu-raster"] }
 # SDL2's API, linked against the system's SDL2 (sdl2-compat on SDL3), as DSlot does.
 sdl2 = "0.38"
 glow = "0.14"
