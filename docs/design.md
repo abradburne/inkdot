@@ -1,21 +1,7 @@
 # Design: a Game Boy and Game Boy Color emulator for the RG DS+ on nibOS
 
-Status: **approved** (2026-10-19), with all seven decisions as recommended (name inkdot,
-MIT OR Apache-2.0, nibkit in nibOS's `sdk/`, panel-locked timing, DMG games on a CGB by default,
-the bottom screen dimmed with an "off" option, resume). Built since; where the build differs from
-this document:
-
-- The band-limited synthesis lives in the core (`synth.rs`), not the frontend: it is plain DSP,
-  and the headless tests can then check the sound.
-- nibkit, the shared crate, was written by the nibOS and DSlot sessions; inkdot uses it. Screen
-  off is nibOS's `bl_power` knob (AGENTS.md "Screen off").
-- The options are declared in the DSlot description, `packaging/nibos/inkdot.toml`, which DSlot
-  shows per console and game and inkdot builds in; changes made in inkdot's own menu are kept in
-  its settings file for now (whether to write DSlot's file instead is with the DSlot session).
-- The DMG looks are Game Boy Color, Game Boy, Pocket, Light and plain grey (the user asked for
-  the original and Pocket styles); the Color look runs the game on a CGB, the others on a DMG.
-
-The rest of this document is the design as reviewed.
+How inkdot is designed: the core, the DS+ frontend, and how it fits nibOS and DSlot.
+[architecture.md](architecture.md) says how the code is laid out.
 
 ## What it is
 
@@ -42,8 +28,7 @@ a self-contained later addition; [Later](#later) lists them with what they need.
 
 ## Clean-room rules
 
-The user must own the code outright and be free to license it, including to clients who fork
-it. So:
+inkdot is entirely its author's own code, so it can be licensed freely. So:
 
 - **Sources allowed**: public hardware documentation (Pan Docs, the gbdev.io resources, the
   *Game Boy: Complete Technical Reference*, the Cycle-Accurate GB Docs), test-ROM documentation
@@ -152,7 +137,7 @@ end of the frame), without changing behaviour; the tests decide.
   (bit 4, bit 5 in double speed), length counters with the documented extra-clock quirks,
   envelopes, sweep with its negate/overflow behaviour, wave RAM access rules (DMG corruption on
   retrigger, CGB differences), NR52 power-off behaviour, PCM12/PCM34 (CGB).
-- Output: each channel's level changes as they happen, in machine time. The frontend turns them
+- Output: each channel's level changes as they happen, in machine time. The core turns them
   into 48 kHz samples with **band-limited step synthesis** (a windowed-sinc step table we compute
   ourselves), which removes aliasing, and **the resampling ratio is the time-to-sample factor**
   in that synthesis, so adjusting playback speed by a fraction of a percent costs nothing and
@@ -294,7 +279,7 @@ Beyond pass/fail:
   animation of the thumbnail flying into it. Menu + R and Menu + L are quick save and quick load.
 - **Battery**: the bottom screen is redrawn only when something on it changes (never at 60 Hz
   during play), and dims to the backlight floor after a while untouched; a touch brings it
-  back. See [Decisions](#decisions) for whether it may also turn off.
+  back. An option turns it off instead.
 
 ### Frame pacing: one emulated frame per panel refresh
 
@@ -413,18 +398,13 @@ which is a request for DSlot, not this project. The emulator opens `.zip` files 
 
 ### Settings: three levels
 
-| Level | Where | Example |
-|---|---|---|
-| All games | `~/.config/inkdot/inkdot.toml`, `[all]` | input timing, LCD look, bottom screen dimming |
-| A system | the same file, `[GB]` and `[GBC]` | GB games run on CGB with the colourised palette; GB palette |
-| One game | `/mnt/roms/Saves/<GB or GBC>/<ROM name>/inkdot.toml` | this game's palette, its border, exact speed |
-
-A game's setting wins over its system's, which wins over all games'. The Options page shows
-each setting with the level it currently comes from and lets the user change it "for this
-game", "for all GB (or GBC) games" or "for all games", and reset a level. DSlot's
-`launch.conf` options (`{options}`) are command-line flags with the same names, applied on top
-for that run only, never written back. The settings file lives with the saves so a game's
-choices travel with it from one card to another.
+Each option has a value for all games, for a console (GB or GBC) and for one game; a game's value
+wins over its console's, which wins over all games'. They are kept as `inkdot.<option>` in a
+nibkit settings file: DSlot's own on nibOS (each option DSlot shows lives there and nowhere else),
+else inkdot's (`~/.config/inkdot/settings.toml`). Each option row in the menu says which level
+its value comes from ("Use GB", "Use all games") and can set or clear it at the game's or the
+console's level. Flags DSlot passes on the command line carry the same values for that run only.
+[architecture.md](architecture.md) says how the options are declared once.
 
 ### Saves
 
@@ -435,8 +415,8 @@ DSlot makes the game's folder and passes it as `--saves`: `/mnt/roms/Saves/GB/<R
 |---|---|
 | `<ROM name>.sav` | battery RAM, raw, the size the header says (the common format other tools read) |
 | `<ROM name>.rtc` | MBC3 RTC state: our documented little-endian layout (registers, latched registers, wall-clock time at save) |
-| `<ROM name>.state1` … `.state12`, `.auto.state` | save states with their thumbnails |
-| `inkdot.toml` | this game's settings |
+| `<ROM name>.state1` … `.state6`, `.auto.state` | save states with their thumbnails; `.auto.state` is where the game was left |
+| `<ROM name>.auto-dmg.state`, `.auto-cgb.state` | the other console's resume state, kept aside when a look changes the console |
 
 The partition is FAT, so names are kept to characters FAT allows; atomic writes as above.
 
@@ -445,9 +425,8 @@ The partition is FAT, so names are kept to characters FAT allows; atomic writes 
 `SDL_VIDEODRIVER=kmsdrm` and `SDL_KMSDRM_ATOMIC=0` come from DSlot's environment; PipeWire is
 found through `XDG_RUNTIME_DIR`; the emulator runs as the user in DSlot's unit, with the
 `video` group for the backlights. It follows nibOS's device interface: `/run/nibos/` names,
-never kernel paths; percent, never raw levels; nothing below the backlight floor. The nibOS
-`AGENTS.md` being written next to the app template (`sdk/`) is the reference; where this design
-and it disagree, it wins and this design changes.
+never kernel paths; percent, never raw levels; nothing below the backlight floor. nibOS's
+`AGENTS.md` is the reference; where this design and it disagree, it wins.
 
 ### Package
 
@@ -459,91 +438,15 @@ restarted after each run.
 
 ## Shared code with DSlot: `nibkit`
 
-DSlot and this emulator, and every nibOS app after them, need the same handful of things done
-the same way. Proposed: a small library crate, **`nibkit`**, with no UI framework and few
-dependencies:
-
-| Module | What | Now in |
-|---|---|---|
-| `screens` | open the top and bottom panels by role (SDL display order under KMSDRM, checked), GLES 3.1 contexts, swap policy | DSlot `platform/`, the app template |
-| `vblank` | the time of a panel's vblanks (DRM vblank events on its CRTC), for pacing | new (DSlot `kms.rs` is related) |
-| `pad` | face buttons by printed name, Back under both names, Menu-release handling, stick dead zone | DSlot `platform/nibos.rs`, the template |
-| `touch` | touch events in bottom-panel pixels | DSlot `touch.rs` |
-| `backlight` | perceptual percent ↔ level with the floor, per named screen | nibos-hw `backlight.rs` |
-| `settings` | layered TOML settings (all / system / game) with atomic saves | new |
-| `emulator` | the DSlot description format (serde types), so DSlot reads what emulators write with one definition, and emulators test their own file | DSlot `emulator.rs` |
-| `paths` | ROM roots, the saves layout, XDG folders | DSlot `platform/nibos.rs` |
-
-It is extracted from DSlot by the DSlot session (DSlot then depends on it), not rewritten from
-memory here. Two things to settle: **where it lives** (its own small repository, or `sdk/nibkit`
-in the nibOS repository next to the app template) and **its licence**. DSlot is GPL-3.0-or-later
-and nibOS is MIT; the code moved into nibkit is the user's own, so the user can license it MIT,
-which both GPL DSlot and this emulator (under any licence) can use. The emulator's UI drawing
-(text, buttons) stays in the emulator for now, in DSlot's visual language; if a third app needs
-it, it moves to a `nibkit-ui` crate.
+DSlot, this emulator and every nibOS app after them need the same handful of things done the same
+way. They share [nibkit](https://github.com/abradburne/nibkit), a small library crate (MIT) with
+no UI framework and few dependencies: the screens by role, vblank times, the pad by printed
+names, touch, backlights, layered settings, the DSlot description format, paths, and the menu
+DSlot and the emulators all draw.
 
 ## Licence
 
-The user holds the copyright and can always license the code to a client on other terms too;
-the question is what the public licence is.
-
-| Option | For | Against |
-|---|---|---|
-| **MIT** | Same as nibOS; one short file; anyone, clients included, can fork and ship, closed or open | No explicit patent grant; forks need not share fixes |
-| **MIT OR Apache-2.0** | The Rust ecosystem's default; Apache adds an explicit patent grant and a NOTICE convention | Two licence files; slightly more to explain |
-| **MPL-2.0** | Changes to our files stay open, while a product may combine them with closed code | Clients' forks of the core must publish their changes to it; less simple for "license freely" |
-| GPL-3.0 | Everything built on it stays open (as DSlot) | Contradicts licensing freely to clients without a separate deal |
-
-**Recommendation: MIT OR Apache-2.0**: permissive (matches "license freely, including client
-forks"), consistent with Rust crates the core might one day be published as, and the patent
-grant is worth having for an emulator. Plain MIT is the close second, for being the same as
-nibOS. (Not legal advice; one more point for a lawyer if it matters to a client: the extent to
-which code written mostly by an AI agent is protected by copyright differs by country, and the
-provenance log and the person's direction and testing of each change are the record of
-authorship.)
-
-## Name
-
-Short, pronounceable, not trademark-adjacent (no Nintendo, Game Boy or "GB" as the leading word),
-and ideally fitting nibOS: a pen's **nib** makes **dots**, and the Game Boy is a dot-matrix game.
-Checked 2026-10-19 (crates.io API, AUR and Arch repositories, GitHub repository search):
-
-| Name | crates.io | AUR / Arch | GitHub | Notes |
-|---|---|---|---|---|
-| **inkdot** | free (`inkdot`, `inkdot-core`) | free | 8 repos, all tiny; none an emulator | "Inkdot Games", a small studio's website exists; low risk, but a games-adjacent name |
-| **dotwell** | free | free | 6 tiny repos | An ink well holds a nib's ink; no games use found |
-| **dotlet** | free | free | 11; a bioinformatics dot-plot tool (21 stars) | Different field |
-| **stippl** | free | free | `stipple` names are taken by a pixel-art editor and UI toolkits | Too close to "Stipple Effect" (a pixel-art editor) |
-
-Not taken further: `stipple`, `tittle`, `jot`, `quill`, `speck`, `nibble`, `mote`, `blot`
-(crates taken), `smudge`, `mottle`, `ferrule`, `jotter` (busy elsewhere).
-
-**Recommendation: inkdot** (`inkdot`, `inkdot-core`; prose "Inkdot"), with **dotwell** if the
-games-studio overlap bothers. Before any public release, a trademark search (USPTO, EUIPO, JPO)
-for the chosen name in class 9 (software).
-
-## Plan for step 2
-
-Test-first throughout: each milestone starts with its tests failing and ends with them in the
-suite.
-
-1. Repository, CI, `make check`, the test-ROM fetcher with pinned hashes, `inkdot-test` harness
-   (serial capture, Mooneye signature, image compare, hashes), AGENTS.md, CONTRIBUTING.md.
-2. CPU against the per-instruction vectors; then Blargg `cpu_instrs`, `instr_timing`.
-3. Timer, interrupts, HALT, OAM DMA; Blargg `mem_timing*`, Mooneye timer/interrupt/DMA tests,
-   boot state tests.
-4. DMG PPU: dmg-acid2, Mooneye PPU tests.
-5. Cartridges, battery saves, RTC: Mooneye MBC tests, `rtc3test`.
-6. CGB: palettes, banks, HDMA, double speed, compatibility mode: cgb-acid2, CGB tests.
-7. APU: `dmg_sound`, `cgb_sound`; band-limited synthesis tests (spectral, against ideal tones).
-8. Save states (round-trip tests over every test ROM and demo).
-9. Frontend, top screen: pacing, audio, input, latency and battery measurements on the DS+.
-10. Bottom screen: menu, states with thumbnails, looks, options with levels; nibkit adopted.
-11. DSlot description, PKGBUILD, device tests with the user's games, docs (README, using,
-    architecture, accuracy), benchmarks.
-
-Changed in play-testing: the design had Back and Menu the other way round. They now follow
-the rest of the DS+ (DSlot's docs/emulators.md): Back is the program's menu, Menu goes home.
+MIT OR Apache-2.0. The Roboto Condensed fonts built in through nibkit are under the SIL OFL 1.1.
 
 ## Later
 
@@ -552,24 +455,3 @@ the top screen), link cable between two DS+ over Wi-Fi (serial with latency hidi
 MBC5 rumble carts (needs nibOS's rumble interface), rewind (a ring of compressed states; a state
 is ~50 KB), MBC6/MBC7 (tilt via the stick)/HuC1/HuC3/MMM01, our own open boot ROM with our own
 start-up animation, cheats.
-
-An efficiency comparison, for our own use only: CPU time per frame, its spread, and power from the
-rk817 gauge, against other emulators run as black boxes on the same games, with each one's
-accuracy stated alongside. Internal data; inkdot's documents keep measuring against inkdot's own
-targets.
-
-## Decisions
-
-For the user:
-
-1. **Name**: inkdot (recommended), dotwell, or another.
-2. **Licence**: MIT OR Apache-2.0 (recommended), MIT, or MPL-2.0.
-3. **nibkit**: its own repository or `sdk/nibkit` in nibOS (recommended: in nibOS, next to the
-   app template, so the SDK is one place), and MIT for it.
-4. **Default speed**: panel-locked (recommended) or exact.
-5. **DMG games by default**: on CGB with the compatibility palette (recommended, it's what a
-   Game Boy Color shows), or as a DMG with a green/grey palette.
-6. **Bottom screen during play**: dim to the floor when untouched (recommended), or also turn
-   its backlight off entirely (more battery; nibOS's floor rule would need an exception for it).
-7. **Resume**: start each game from its automatic state (recommended, with "Start over" on the
-   bottom screen), or always cold-boot the game.
