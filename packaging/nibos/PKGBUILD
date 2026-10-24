@@ -33,9 +33,14 @@ pkgver() {
 prepare() {
     rm -rf "$srcdir/inkdot" "$srcdir/nibkit"
     mkdir -p "$srcdir/inkdot/packaging/nibos"
-    cp -r "$_root"/{Cargo.toml,Cargo.lock,.cargo,crates,README.md,CHANGELOG.md,LICENSE-MIT,LICENSE-APACHE,LICENSE-OFL,docs} "$srcdir/inkdot/"
+    cp -r "$_root"/{Cargo.toml,Cargo.lock,crates,README.md,CHANGELOG.md,LICENSE-MIT,LICENSE-APACHE,LICENSE-OFL,docs} "$srcdir/inkdot/"
     # Installed for DSlot, and checked against the program's options by a test.
     cp "$_root/packaging/nibos/inkdot.toml" "$srcdir/inkdot/packaging/nibos/"
+    # The build's own Cargo config, not the checkout's (which is each developer's): tuned for the
+    # DS+'s Cortex-A55 cores.
+    mkdir -p "$srcdir/inkdot/.cargo"
+    printf '[target.aarch64-unknown-linux-gnu]\nrustflags = ["-C", "target-cpu=cortex-a55"]\n' \
+        > "$srcdir/inkdot/.cargo/config.toml"
     local locked=--locked
     if [ -n "$_nibkit" ]; then
         mkdir -p "$srcdir/nibkit"

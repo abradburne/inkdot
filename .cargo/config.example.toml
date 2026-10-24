@@ -1,3 +1,4 @@
+# Copy to .cargo/config.toml (gitignored) and adjust: Cargo reads that one.
 # The RG DS+'s cores: Cortex-A55 (tuning and the extensions it has). Builds for the device run
 # natively in the aarch64 build machine; on a Mac this section doesn't apply.
 [target.aarch64-unknown-linux-gnu]
@@ -6,3 +7,8 @@ rustflags = ["-C", "target-cpu=cortex-a55"]
 # Trying inkdot out on an Apple silicon Mac: SDL2 from Homebrew (`brew install sdl2-compat`).
 [target.aarch64-apple-darwin]
 rustflags = ["-L", "/opt/homebrew/lib"]
+
+# Building against a local nibkit checkout instead of the tag Cargo.toml names (CONTRIBUTING.md,
+# "nibkit"): the path is relative to this folder's parent, the repository.
+# [patch."https://github.com/abradburne/nibkit"]
+# nibkit = { path = "../nibkit" }

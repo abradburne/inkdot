@@ -20,7 +20,7 @@ rom="$1"
 shift
 [ "${1:-}" = -- ] && shift
 
-in_vm bash -lc "cd '$root' && CARGO_TARGET_DIR=$TARGET_DIR cargo build --release --quiet -p inkdot && cp $TARGET_DIR/release/inkdot /tmp/inkdot-for-device"
+in_vm bash -lc "cd '$root' && CARGO_TARGET_DIR=$TARGET_DIR CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_RUSTFLAGS='-C target-cpu=cortex-a55' cargo build --release --quiet -p inkdot && cp $TARGET_DIR/release/inkdot /tmp/inkdot-for-device"
 in_vm cat /tmp/inkdot-for-device | on_device "cat > /tmp/inkdot && chmod 755 /tmp/inkdot"
 if [[ "$rom" == device:* ]]; then
     remote_rom="${rom#device:}"

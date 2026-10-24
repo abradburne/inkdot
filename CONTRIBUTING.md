@@ -18,19 +18,13 @@ hears is also tried on the handheld, and the commit says how.
 ## nibkit
 
 The frontend uses [nibkit](https://github.com/abradburne/nibkit), nibOS's SDK library, as a git
-dependency at a tag. To work on both at once, build against a local checkout with a `[patch]` in
-a Cargo config file *outside* this repository, so no one else's paths end up in it: Cargo reads
-`.cargo/config.toml` in every folder above the one it runs in, so one in the folder that holds
-both checkouts serves every project there.
-
-```toml
-# ../.cargo/config.toml, beside inkdot/ and nibkit/
-[patch."https://github.com/abradburne/nibkit"]
-nibkit = { path = "nibkit" }
-```
+dependency at a tag. To work on both at once, build against a local checkout: copy
+`.cargo/config.example.toml` to `.cargo/config.toml` (gitignored, so your paths stay yours) and
+uncomment its `[patch]`, with the path to your nibkit relative to this repository. The example
+also has the settings for building on an Apple silicon Mac.
 
 Cargo then records the local nibkit in `Cargo.lock`; don't commit that change. The PKGBUILD does
-the same with `NIBKIT=path/to/nibkit makepkg ...`.
+the same with `NIBKIT=path/to/nibkit makepkg ...`, and gives the build its own Cargo config.
 
 ## The clean room
 
