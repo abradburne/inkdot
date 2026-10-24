@@ -329,7 +329,10 @@ mod tests {
         let other = SaveFiles::new(card.join("Saves/GBC/Mole"), "Mole");
         let mole = games.join("Mole.gbc");
         std::fs::write(games.join("Mole.gbc.sav"), [2]).unwrap();
-        assert_eq!(other.adopt_slot_save(&mole), Some(games.join("Mole.gbc.sav")));
+        assert_eq!(
+            other.adopt_slot_save(&mole),
+            Some(games.join("Mole.gbc.sav"))
+        );
         let roms = card.join("Roms/GBC");
         std::fs::create_dir_all(&roms).unwrap();
         std::fs::write(roms.join("Kirby.sav"), [3]).unwrap();
