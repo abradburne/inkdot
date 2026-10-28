@@ -215,3 +215,31 @@ pub(crate) fn decode(data: &[u8], id: Identity) -> Result<Vec<Section<'_>>, Stat
     }
     Ok(sections)
 }
+
+/// Adds a section of the frontend's own to a state made by `GameBoy::save_state`: the core
+/// skips a tag it doesn't know when loading, so the state still loads, here and in a build
+/// that has never heard of the section. `tag` must not be one of the machine's.
+pub fn add_section(state: &mut Vec<u8>, tag: &[u8; 4], payload: &[u8]) {
+    state.extend_from_slice(tag);
+    state.extend_from_slice(&(payload.len() as u32).to_le_bytes());
+    state.extend_from_slice(payload);
+}
+
+/// The payload of the first section tagged `tag` in a state, whatever game it is of; `None`
+/// when the state has no such section, or isn't a state.
+pub fn section<'a>(state: &'a [u8], tag: &[u8; 4]) -> Option<&'a [u8]> {
+    const HEADER: usize = 8 + 2 + 1 + 1 + 2 + 16;
+    if state.len() < HEADER || &state[..8] != MAGIC {
+        return None;
+    }
+    let mut rest = &state[HEADER..];
+    while rest.len() >= 8 {
+        let len = u32::from_le_bytes([rest[4], rest[5], rest[6], rest[7]]) as usize;
+        let payload = rest.get(8..8 + len)?;
+        if &rest[..4] == tag {
+            return Some(payload);
+        }
+        rest = &rest[8 + len..];
+    }
+    None
+}

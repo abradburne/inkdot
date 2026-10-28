@@ -139,3 +139,21 @@ fn a_paused_picture_takes_new_colours() {
     gb.run_frame();
     assert_eq!(gb.frame(), &recoloured[..]);
 }
+
+/// A frontend's own section rides along in a state: the state still loads, and the section
+/// reads back.
+#[test]
+fn a_frontend_section_rides_along() {
+    let Some(rom) = fetched("dmg-acid2/dmg-acid2.gb") else {
+        return;
+    };
+    let mut state = boot(&rom, Model::Dmg).save_state();
+    assert_eq!(inkdot_core::state::section(&state, b"RCHV"), None);
+    inkdot_core::state::add_section(&mut state, b"RCHV", b"progress");
+    assert_eq!(
+        inkdot_core::state::section(&state, b"RCHV"),
+        Some(&b"progress"[..])
+    );
+    assert_eq!(inkdot_core::state::section(b"not a state", b"RCHV"), None);
+    assert_eq!(boot(&rom, Model::Dmg).load_state(&state), Ok(()));
+}
