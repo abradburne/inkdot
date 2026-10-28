@@ -13,6 +13,8 @@ categories.workspace = true
 
 [dependencies]
 inkdot-core = { path = "../inkdot-core" }
+# RetroAchievements (feature `cheevos`): rcheevos, vendored, and curl as the transport.
+inkdot-cheevos = { path = "../inkdot-cheevos", optional = true }
 # nibOS's SDK library (github.com/abradburne/nibkit, MIT): the screens, vblank, buttons, touch,
 # brightness, paths, settings, the menu and DSlot's description format. To build against a local
 # checkout, patch it in from outside the repository (CONTRIBUTING.md, "nibkit").
@@ -31,13 +33,16 @@ libc = "0.2"
 # or a computer. `dslot` adds DSlot's part: options kept in DSlot's settings file, and a test
 # that the description DSlot reads matches inkdot's options. inkdot runs without DSlot either way.
 [features]
-default = ["nibos"]
+default = ["nibos", "cheevos"]
 # On nibOS the menu has the Connections page (Wi-Fi, Bluetooth), which needs nibkit's radios.
 nibos = ["nibkit/nibos", "nibkit/net-control"]
 stock = ["nibkit/stock"]
 # A computer: windows, keyboard, mouse (nibkit chooses it anyway on any system but Linux).
 desktop = ["nibkit/desktop"]
 dslot = ["nibkit/dslot"]
+# RetroAchievements: signed in through DSlot (RA_TOKEN_FILE in the environment), softcore only.
+# Needs a C compiler for rcheevos; the stock and desktop builds leave it out.
+cheevos = ["dep:inkdot-cheevos"]
 
 [lints.rust]
 unsafe_code = "allow"

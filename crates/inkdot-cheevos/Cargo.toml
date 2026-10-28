@@ -1,0 +1,30 @@
+[package]
+name = "inkdot-cheevos"
+description = "RetroAchievements for inkdot: rcheevos (vendored, MIT) driven once a frame, curl as the transport."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+# The vendored rcheevos and the shim go with the crate.
+include = ["src", "csrc", "rcheevos", "build.rs"]
+
+[dependencies]
+inkdot-core = { path = "../inkdot-core" }
+libc = "0.2"
+
+[build-dependencies]
+cc = "1"
+
+# FFI into rcheevos through the shim: each unsafe block says why it holds.
+[lints.rust]
+unsafe_code = "allow"
+missing_docs = "warn"
+
+[lints.clippy]
+undocumented_unsafe_blocks = "deny"
+cast_possible_truncation = "allow"

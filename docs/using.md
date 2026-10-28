@@ -73,6 +73,23 @@ inkdot's (`~/.config/inkdot/`, or beside the program on the stock OS).
 | Resume where I left off | start each game where it was left | On |
 | Fast-forward speed | 2× to 8× | 4× |
 
+## RetroAchievements
+
+Sign in once, on DSlot's **Achievements** tab. From then on every game DSlot starts gets the
+sign-in (the token DSlot kept, never the password) in its environment, and inkdot signs in with
+it, looks the game up by its ROM's hash and, when the service has a set for it, checks the
+achievements as you play. The log (`nib bug-report`, or `journalctl -u dslot`) says what
+happened, one `cheevos:` line each: `Signed in to RetroAchievements -- <you>`, `<game> --
+achievements active`, `Achievement unlocked: <title> (<points>) -- <what for>`, or `No
+achievements for this ROM` when the service doesn't know the dump (a different revision, or a
+patched one). Nothing shows on the screens yet.
+
+inkdot plays **softcore** only: save states, fast-forward and the resume point all stay usable.
+Loading a state or restarting the game starts the achievements' progress over (what you were
+part way through is checked again from the start), so a jump in the game can't unlock anything.
+DSlot's **Mode: Hardcore** is noted in the log and played as softcore. Started by hand, without
+DSlot, there is no sign-in and no session.
+
 ## Files
 
 In the game's saves folder: the one DSlot gives, else `Saves/GB/<game>/` (or `GBC`) on the card

@@ -26,6 +26,7 @@ using a new one. A commit that implements hardware behaviour names its source in
 |---|---|
 | `crates/inkdot-core` | The machine: CPU, PPU, APU, timer, cartridges, save states. `no_std`, no dependencies, no `unsafe`. |
 | `crates/inkdot-test` | Headless runner: the test ROM suites, benchmarks, `--wav`, `--io`, `--break`. |
+| `crates/inkdot-cheevos` | RetroAchievements: rcheevos vendored verbatim (`rcheevos/`, MIT, never edited), a C shim over it (`csrc/`), the Game Boy memory map and a `curl` transport on a thread. Feature `cheevos` of `crates/inkdot`. |
 | `crates/inkdot` | The DS+ program: SDL2 + GLES, [nibkit](https://github.com/abradburne/nibkit) (a git dependency; CONTRIBUTING.md says how to use a local checkout). |
 | `packaging/nibos` | The DSlot description (`inkdot.toml`, checked against `options::SPECS` by a test with `--features dslot`) and the PKGBUILD. |
 | `packaging/stock` | The stock OS's Apps script and `package.sh` (cargo-zigbuild, `--features stock`). |

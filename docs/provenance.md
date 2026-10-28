@@ -44,3 +44,5 @@ ours. Its source is never opened. Record here which one, the version, and how it
 | Roboto Condensed (Google Fonts; built in through nibkit's `menu-raster`) | The menu's text. SIL OFL 1.1 (LICENSE-OFL) |
 | PKWARE APPNOTE.TXT (the zip format's specification) | Reading `.zip` games (`crates/inkdot/src/rom.rs`) |
 | nibkit ([github.com/abradburne/nibkit](https://github.com/abradburne/nibkit), our own, MIT) | Screens, vblank, input names, touch, brightness, volume, paths, settings, DSlot's description format |
+| rcheevos ([github.com/RetroAchievements/rcheevos](https://github.com/RetroAchievements/rcheevos), the service's client library, MIT; vendored in `crates/inkdot-cheevos/rcheevos`) | The RetroAchievements session, the ROM hash, and the service's Game Boy address space (its console table, `src/rcheevos/consoleinfo.c`): a client library, not an emulator |
+| DSperate `src/cheevos/` (our own DS emulator's RetroAchievements layer, not its emulation) | How the launcher's sign-in is read (`RA_TOKEN_FILE`) and what the log says, so DSlot's bug report reads the same for both |

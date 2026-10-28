@@ -27,3 +27,10 @@ The first version.
   that say where their value comes from, a Connections page on nibOS, and long game names that
   wrap and shrink on the top screen.
 - **Desktop**: `--features desktop`, both screens in one window, the keyboard as the controls.
+- **RetroAchievements** (`--features cheevos`, on in the nibOS package): signed in through
+  DSlot's Achievements tab (the token file DSlot passes as `RA_TOKEN_FILE`; never a password),
+  the game identified by its ROM's MD5, its set evaluated once a frame by rcheevos over the
+  service's Game Boy address space (the bus, then the Color's work-RAM and cartridge-RAM
+  banks). Softcore only: save states and fast-forward stay usable; a state load or a restart
+  starts the set's progress over. Unlocks and the session's state go to the log (`cheevos:`
+  lines); an on-screen notice waits for nibkit's shared overlay to have one.

@@ -24,6 +24,7 @@ The core passes the test suites that matter for a Game Boy emulator in full:
 | [`crates/inkdot-core`](crates/inkdot-core) | The machine: CPU, picture, sound, timer, cartridges (MBC1/1M/2/3+RTC/5), save states. `no_std`, no dependencies. |
 | [`crates/inkdot`](crates/inkdot) | The program for the DS+: SDL2, GLES, [nibkit](https://github.com/abradburne/nibkit). |
 | [`crates/inkdot-test`](crates/inkdot-test) | Runs the core headless: the test suites, benchmarks, sound to WAV. |
+| [`crates/inkdot-cheevos`](crates/inkdot-cheevos) | RetroAchievements: [rcheevos](https://github.com/RetroAchievements/rcheevos) (vendored, MIT) behind a small C shim, `curl` as the transport. |
 | [`packaging/nibos`](packaging/nibos) | The PKGBUILD and the description DSlot reads. |
 | [`packaging/stock`](packaging/stock) | The stock OS's Apps script, and the script that builds its zip. |
 
@@ -48,7 +49,9 @@ runs it on the handheld in place of DSlot; `packaging/nibos/PKGBUILD` builds the
 The program is built for one system at a time, by Cargo feature: `nibos` (the default),
 `stock`, or `desktop` (a computer: a window, the keyboard and the mouse; chosen anyway on any
 system but Linux). `dslot` adds DSlot's part (its settings file, and a test that its description of inkdot
-matches inkdot's options); without it inkdot keeps its own settings.
+matches inkdot's options); without it inkdot keeps its own settings. `cheevos` (in the default
+set, with `nibos`) builds RetroAchievements in: the sign-in comes from DSlot through the
+environment (docs/using.md, "RetroAchievements"); it needs a C compiler and, at run time, `curl`.
 
 For the stock OS, cross-built with [cargo-zigbuild](https://github.com/rust-cross/cargo-zigbuild)
 for its glibc 2.31 against the handheld's own SDL2, copied out of a stock image into

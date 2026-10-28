@@ -38,7 +38,8 @@ GameBoy ── Cpu::step(&mut Hardware)       one instruction: each memory acces
 main loop:  wait for the top panel's vblank (nibkit::vblank)
             sleep until vblank + period − (p99 frame cost + 1.5 ms)          pacing.rs
             read input (SDL, the touch panel)                                input.rs
-            run one game frame (or 2-8 fast-forwarding, or as due at exact speed)
+            run one game frame (or 2-8 fast-forwarding, or as due at exact speed),
+                   each checked against the RetroAchievements set         achievements.rs
             sound: synthesizer rate = 48 kHz × 59.7275 × panel period, ± a slow
                    correction holding SDL's queue at 1200 frames            pacing.rs
             picture: frame → RGBA by palette or colour table, upload, shader video.rs
@@ -60,6 +61,18 @@ each; the stock OS's Weston spans both panels with one display, so one window, w
 screen in its left half and the bottom in its right. Where the stock OS lacks what nibOS gives
 (the panel's vblank, backlight power, apps setting brightness), inkdot falls back: the swap's
 own sync, a bottom screen left lit, the stock keys.
+
+RetroAchievements (`crates/inkdot-cheevos`, feature `cheevos`): rcheevos, the service's own
+client library, vendored verbatim and built by `cc` with a C shim (`csrc/shim.c`) that gives
+Rust a flat API of opaque pointers and C strings, so no rcheevos struct is mirrored in Rust.
+rcheevos runs only on the emulation thread, in `Client::frame` after each emulated frame
+(`Client::idle` while paused), where it reads the machine through `memory.rs`: the service's
+Game Boy address space (the bus, then the Color's work-RAM banks 2-7 at `$10000` and cartridge
+RAM banks 1-15 at `$16000`, as rcheevos' console table lays them out) over the core's arrays.
+The service's requests go to a thread that runs `curl` (the form, with the token, on its
+standard input); the answers come back on a channel and are handed to rcheevos on the next
+frame, so the network never holds a frame. The sign-in is DSlot's, from `RA_TOKEN_FILE`;
+softcore only, and a state load or restart calls `rc_client_reset`.
 
 ## Known gaps
 

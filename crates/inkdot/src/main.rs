@@ -3,6 +3,8 @@
 //! bottom touch screen has the emulator's controls. `inkdot --help` lists the options;
 //! docs/using.md says how to play.
 
+#[cfg(feature = "cheevos")]
+mod achievements;
 mod args;
 mod input;
 mod looks;
@@ -62,7 +64,8 @@ const AUDIO_TARGET: u32 = AUDIO_BUFFER + 700;
 /// The bottom screen dims (or goes off) after this long untouched in play.
 const IDLE: Duration = Duration::from_secs(10);
 
-/// INKDOT_DEBUG: `stats` logs pacing and sound every five seconds; `shot=DIR` saves both
+/// INKDOT_DEBUG: `stats` logs pacing and sound every five seconds; `cheevos` logs every
+/// RetroAchievements request; `shot=DIR` saves both
 /// screens as PNG files there ten seconds in; `latency` logs, for each change of the buttons,
 /// when the frame that read it started and the vblank at which it was shown (CLOCK_MONOTONIC
 /// ns, comparable with nibOS's latency tools); `frames=FILE` writes a line per frame on leaving:
@@ -84,6 +87,8 @@ struct Debug {
     frames: Option<PathBuf>,
     /// The utilization clamp to ask for in play (of 1024), instead of perf::PLAY.
     clamp: Option<u32>,
+    /// `cheevos`: every request to RetroAchievements and rcheevos' own log.
+    cheevos: bool,
 }
 
 impl Debug {
@@ -98,6 +103,7 @@ impl Debug {
                 _ if part == "stats" => d.stats = true,
                 _ if part == "latency" => d.latency = true,
                 _ if part == "cycle-looks" => d.cycle_looks = true,
+                _ if part == "cheevos" => d.cheevos = true,
                 Some(("menu", page)) => d.menu = Some(page.to_owned()),
                 _ => {}
             }
@@ -139,6 +145,9 @@ struct App {
     gb: GameBoy,
     /// The game, to start it again on the other console.
     rom: Vec<u8>,
+    /// RetroAchievements, when DSlot passed a sign-in (achievements.rs).
+    #[cfg(feature = "cheevos")]
+    cheevos: Option<inkdot_cheevos::Client>,
     options: Options,
     console: &'static str,
     title: String,
@@ -286,9 +295,13 @@ fn run(args: args::Args) -> Result<(), String> {
     let out_rate = audio
         .as_ref()
         .map_or(nibkit::audio::ADVICE.rate, |q| q.spec().freq as u32) as f64;
+    #[cfg(feature = "cheevos")]
+    let cheevos = achievements::start(&rom, console == "GBC", Debug::from_env().cheevos);
     let mut app = App {
         gb,
         rom,
+        #[cfg(feature = "cheevos")]
+        cheevos,
         options,
         console,
         title: nibkit::names::display_name(&stem),
@@ -650,6 +663,7 @@ impl App {
                         self.quick_slot = slot;
                         self.toast(&format!("Slot {slot} loaded"));
                         self.ui.close_menu();
+                        self.cheevos_reset();
                     }
                     Some(Err(e)) => self.toast(&format!("Can't load: {e}")),
                     None => self.toast(&format!("Slot {slot} is empty")),
@@ -854,9 +868,19 @@ impl App {
             }
         }
         self.started = Instant::now();
+        self.cheevos_reset();
         self.apply_look();
         self.ui.close_menu();
         self.refresh_model();
+    }
+
+    /// The machine's memory jumped (a state loaded, the game started over): the achievement
+    /// set's progress starts over with it, so the jump can't unlock anything.
+    fn cheevos_reset(&mut self) {
+        #[cfg(feature = "cheevos")]
+        if let Some(c) = &mut self.cheevos {
+            c.reset();
+        }
     }
 
     fn lcd_look(&self) -> LcdLook {
@@ -918,6 +942,12 @@ impl App {
             };
             for _ in 0..frames {
                 self.gb.run_frame();
+                // The set is checked against the machine after every frame it ran, fast
+                // or not, so a condition that holds for a frame is seen.
+                #[cfg(feature = "cheevos")]
+                if let Some(c) = &mut self.cheevos {
+                    c.frame(&self.gb);
+                }
             }
             let base = if self.options.str("speed") == "exact" {
                 self.out_rate
@@ -936,6 +966,13 @@ impl App {
             if self.gb.hw.cart.dirty && self.battery_dirty.is_none() {
                 self.battery_dirty = Some(Instant::now());
             }
+        }
+        #[cfg(feature = "cheevos")]
+        if let Some(c) = &mut self.cheevos {
+            if paused {
+                c.idle(&self.gb);
+            }
+            achievements::show(c);
         }
         let t1 = Instant::now();
         let m1 = if logging {
