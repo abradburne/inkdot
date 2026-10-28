@@ -1,6 +1,6 @@
 [package]
 name = "inkdot-cheevos"
-description = "RetroAchievements for inkdot: rcheevos (vendored, MIT) driven once a frame, curl as the transport."
+description = "RetroAchievements for an emulator: rcheevos (vendored, MIT) driven once a frame, curl as the transport."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -14,7 +14,6 @@ categories.workspace = true
 include = ["src", "csrc", "rcheevos", "build.rs"]
 
 [dependencies]
-inkdot-core = { path = "../inkdot-core" }
 libc = "0.2"
 
 [build-dependencies]

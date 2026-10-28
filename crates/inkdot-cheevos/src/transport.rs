@@ -5,8 +5,9 @@
 //! standard input, never in an argument.
 
 use std::io::Write;
+use std::path::PathBuf;
 use std::process::{Command, Stdio};
-use std::sync::mpsc::{channel, Receiver, Sender};
+use std::sync::mpsc::{Receiver, Sender};
 
 /// How long one request may take, in all (the service answers in well under a second; a
 /// stalled network should not hold a thread for long, and rcheevos retries).
@@ -21,35 +22,43 @@ pub struct Job {
     pub ticket: usize,
 }
 
-/// An answer: the HTTP status (0 when the service was never reached) and the body.
+/// An answer: the HTTP status and the body, or, when the service was never reached,
+/// [`ffi::NOT_REACHED`](crate::ffi::NOT_REACHED) and why, which rcheevos retries and logs.
 pub struct Done {
     pub ticket: usize,
     pub status: i32,
     pub body: Vec<u8>,
-    /// Why the service wasn't reached, for the log.
-    pub error: Option<String>,
 }
 
-/// Starts the thread; jobs go in one end, answers come out the other. The thread ends when
-/// the sender is dropped.
-pub fn start(user_agent: String) -> (Sender<Job>, Receiver<Done>) {
-    let (jobs, incoming) = channel::<Job>();
-    let (outgoing, done) = channel::<Done>();
+impl Done {
+    /// The service wasn't reached, for this reason.
+    pub fn not_reached(ticket: usize, why: &str) -> Done {
+        Done {
+            ticket,
+            status: crate::ffi::NOT_REACHED,
+            body: why.as_bytes().to_vec(),
+        }
+    }
+}
+
+/// Starts the thread, which runs `curl` for each job that comes in and sends its answer out.
+/// It ends when the jobs' sender is dropped. Without a thread the jobs go nowhere; the client
+/// answers them itself.
+pub fn start(curl: PathBuf, user_agent: String, incoming: Receiver<Job>, outgoing: Sender<Done>) {
     let spawned = std::thread::Builder::new()
-        .name("inkdot-cheevos".into())
+        .name("cheevos-net".into())
         .spawn(move || {
             ordinary_priority();
             for job in incoming {
-                let (status, body, error) = perform(&job, &user_agent);
-                if outgoing
-                    .send(Done {
+                let done = match perform(&curl, &job, &user_agent) {
+                    Ok((status, body)) => Done {
                         ticket: job.ticket,
                         status,
                         body,
-                        error,
-                    })
-                    .is_err()
-                {
+                    },
+                    Err(why) => Done::not_reached(job.ticket, &why),
+                };
+                if outgoing.send(done).is_err() {
                     break;
                 }
             }
@@ -57,7 +66,6 @@ pub fn start(user_agent: String) -> (Sender<Job>, Receiver<Done>) {
     if let Err(e) = spawned {
         eprintln!("cheevos: cannot start the network thread: {e}");
     }
-    (jobs, done)
 }
 
 /// A thread that waits on the network must not hold the emulation thread's scheduling
@@ -74,10 +82,9 @@ fn ordinary_priority() {
     }
 }
 
-/// Runs `curl` for one request: the status, the body, and the transport error if there was
-/// one.
-fn perform(job: &Job, user_agent: &str) -> (i32, Vec<u8>, Option<String>) {
-    let mut cmd = Command::new("curl");
+/// Runs `curl` for one request: the status and the body, or why the service wasn't reached.
+fn perform(curl: &PathBuf, job: &Job, user_agent: &str) -> Result<(i32, Vec<u8>), String> {
+    let mut cmd = Command::new(curl);
     cmd.args([
         "-sS",
         "--max-time",
@@ -102,17 +109,11 @@ fn perform(job: &Job, user_agent: &str) -> (i32, Vec<u8>, Option<String>) {
     }
     cmd.arg(&job.url);
     cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
-    let mut child = match cmd.spawn() {
-        Ok(c) => c,
-        Err(e) => return (0, Vec::new(), Some(format!("curl: {e}"))),
-    };
+    let mut child = cmd.spawn().map_err(|e| format!("curl: {e}"))?;
     if let (Some((_, form)), Some(mut stdin)) = (&job.post, child.stdin.take()) {
         let _ = stdin.write_all(form.as_bytes());
     }
-    let out = match child.wait_with_output() {
-        Ok(o) => o,
-        Err(e) => return (0, Vec::new(), Some(format!("curl: {e}"))),
-    };
+    let out = child.wait_with_output().map_err(|e| format!("curl: {e}"))?;
     if !out.status.success() {
         let why = String::from_utf8_lossy(&out.stderr);
         let why = why.lines().next().unwrap_or("").trim();
@@ -121,10 +122,12 @@ fn perform(job: &Job, user_agent: &str) -> (i32, Vec<u8>, Option<String>) {
         } else {
             why.to_owned()
         };
-        return (0, Vec::new(), Some(why));
+        return Err(why);
     }
-    let (body, status) = status_and_body(out.stdout);
-    (status, body, None)
+    match status_and_body(out.stdout) {
+        (_, 0) => Err("curl gave no HTTP status".into()),
+        (body, status) => Ok((status, body)),
+    }
 }
 
 /// The body and the status `curl` wrote after it on a line of its own.

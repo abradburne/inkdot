@@ -8,6 +8,8 @@ mod achievements;
 mod args;
 mod input;
 mod looks;
+#[cfg(feature = "cheevos")]
+mod memory;
 mod options;
 mod pacing;
 mod perf;
@@ -299,8 +301,9 @@ fn run(args: args::Args) -> Result<(), String> {
     let out_rate = audio
         .as_ref()
         .map_or(nibkit::audio::ADVICE.rate, |q| q.spec().freq as u32) as f64;
+    let debug = Debug::from_env();
     #[cfg(feature = "cheevos")]
-    let cheevos = achievements::start(&rom, console == "GBC", Debug::from_env().cheevos);
+    let cheevos = achievements::start(&rom, console == "GBC", debug.cheevos);
     let mut app = App {
         gb,
         rom,
@@ -333,7 +336,7 @@ fn run(args: args::Args) -> Result<(), String> {
         toast_until: None,
         quit: false,
         exact_start: None,
-        debug: Debug::from_env(),
+        debug,
         stats: Stats::default(),
         frame_count: 0,
         last_buttons: 0,
@@ -354,7 +357,7 @@ fn run(args: args::Args) -> Result<(), String> {
     }
     app.refresh_model();
     let vblanks = watch_vblanks();
-    let play_clamp = Debug::from_env().clamp.unwrap_or(perf::PLAY);
+    let play_clamp = app.debug.clamp.unwrap_or(perf::PLAY);
     if !perf::clamp_min(play_clamp) {
         eprintln!(
             "inkdot: no utilization clamp (kernel without uclamp): schedutil decides the clock"
@@ -950,7 +953,7 @@ impl App {
                 // or not, so a condition that holds for a frame is seen.
                 #[cfg(feature = "cheevos")]
                 if let Some(c) = &mut self.cheevos {
-                    c.frame(&self.gb);
+                    c.frame(&memory::Bus(&self.gb));
                 }
             }
             let base = if self.options.str("speed") == "exact" {
@@ -974,11 +977,12 @@ impl App {
         #[cfg(feature = "cheevos")]
         if let Some(c) = &mut self.cheevos {
             if paused {
-                c.idle(&self.gb);
+                c.idle(&memory::Bus(&self.gb));
             }
-            for m in achievements::show(c) {
-                let (said, shows) = achievements::notice(&m);
-                self.ui.notice(&said, shows);
+            for said in achievements::said(c) {
+                if let achievements::Said::Notice(n) = said {
+                    self.ui.notice(&n.said(), n.shows);
+                }
             }
         }
         let t1 = Instant::now();

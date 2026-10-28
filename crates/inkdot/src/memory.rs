@@ -1,10 +1,12 @@
-//! RetroAchievements' Game Boy address space over inkdot's machine.
+//! RetroAchievements' Game Boy address space over inkdot's machine ([`Bus`], the
+//! [`Memory`] rcheevos reads).
 //!
 //! The service lays a Game Boy's memory out as the CPU's bus, `$0000`-`$FFFF`, then the banks a
 //! game pages in that the bus can't show at once: the Game Boy Color's work-RAM banks 2-7 at
 //! `$10000`-`$15FFF` and cartridge RAM banks 1-15 at `$16000`-`$33FFF` (rcheevos'
-//! `src/rcheevos/consoleinfo.c`, the `_rc_memory_regions_gameboy_color` table; a plain Game Boy
-//! has the same bus and no banks beyond it). `$D000`-`$DFFF` is work-RAM bank 1 whatever the
+//! `src/rcheevos/consoleinfo.c`, the `_rc_memory_regions_gameboy_color` table). A plain Game
+//! Boy has the same bus and cartridge banks, and nothing at `$10000`-`$15FFF` (the
+//! `_rc_memory_regions_gameboy` table marks it unused), so there it reads as unbacked. `$D000`-`$DFFF` is work-RAM bank 1 whatever the
 //! game has paged there, and `$A000`-`$BFFF` cartridge RAM bank 0: a set's addresses mean the
 //! same thing whatever the game is doing at the moment.
 //!
@@ -13,31 +15,41 @@
 //! RAM is the first bank. An address outside every region reads as zero and reports itself
 //! unbacked, so rcheevos marks an achievement that needs it unsupported rather than wrong.
 
-use inkdot_core::GameBoy;
+use inkdot_cheevos::Memory;
+use inkdot_core::{GameBoy, Model};
 
 /// One address past the last the service defines for a Game Boy Color.
-pub const END: u32 = 0x34000;
+#[cfg(test)]
+const END: u32 = 0x34000;
 
-/// Reads `buf.len()` bytes at `address`; how many of them were backed. Unbacked bytes are
-/// zero.
-pub fn read(gb: &GameBoy, address: u32, buf: &mut [u8]) -> u32 {
-    let mut backed = 0;
-    for (i, b) in buf.iter_mut().enumerate() {
-        let at = address.wrapping_add(i as u32);
-        match byte(gb, at) {
-            Some(v) => {
-                *b = v;
-                backed += 1;
+/// The machine, as rcheevos reads it.
+pub struct Bus<'a>(pub &'a GameBoy);
+
+impl Memory for Bus<'_> {
+    /// Reads `buf.len()` bytes at `address`; how many of them were backed. Unbacked bytes are
+    /// zero.
+    fn read(&self, address: u32, buf: &mut [u8]) -> u32 {
+        let mut backed = 0;
+        for (i, b) in buf.iter_mut().enumerate() {
+            let at = address.wrapping_add(i as u32);
+            match byte(self.0, at) {
+                Some(v) => {
+                    *b = v;
+                    backed += 1;
+                }
+                None => *b = 0,
             }
-            None => *b = 0,
         }
+        backed
     }
-    backed
 }
 
 /// One byte of the service's address space, or `None` where nothing backs it.
 fn byte(gb: &GameBoy, at: u32) -> Option<u8> {
     let hw = &gb.hw;
+    if gb.model() == Model::Dmg && (0x10000..=0x15fff).contains(&at) {
+        return None;
+    }
     Some(match at {
         0x0000..=0x7fff => hw.cart.read_rom(at as u16),
         0x8000..=0x9fff => hw.ppu.vram[(at - 0x8000) as usize],
@@ -56,10 +68,17 @@ fn byte(gb: &GameBoy, at: u32) -> Option<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use inkdot_core::Model;
+
+    fn read(gb: &GameBoy, address: u32, buf: &mut [u8]) -> u32 {
+        Bus(gb).read(address, buf)
+    }
 
     /// A 64 KiB MBC5 ROM with 32 KiB of RAM, each ROM byte its bank number.
     fn machine() -> GameBoy {
+        machine_on(Model::Cgb)
+    }
+
+    fn machine_on(model: Model) -> GameBoy {
         let mut rom = vec![0u8; 0x10000];
         for (i, b) in rom.iter_mut().enumerate() {
             *b = (i / 0x4000) as u8;
@@ -67,7 +86,23 @@ mod tests {
         rom[0x143] = 0x80;
         rom[0x147] = 0x1b; // MBC5 + RAM + battery
         rom[0x149] = 3; // 32 KiB
-        GameBoy::new(rom, Model::Cgb).unwrap()
+        GameBoy::new(rom, model).unwrap()
+    }
+
+    /// A Game Boy has no work-RAM banks beyond the bus; its cartridge RAM banks are there.
+    #[test]
+    fn a_game_boy_has_no_wram_banks() {
+        let gb = machine_on(Model::Dmg);
+        let mut b = [0xffu8; 2];
+        assert_eq!(read(&gb, 0x10000, &mut b), 0);
+        assert_eq!(b, [0, 0]);
+        assert_eq!(
+            read(&gb, 0x15fff, &mut b),
+            1,
+            "the first cartridge bank is backed"
+        );
+        assert_eq!(read(&gb, 0x16000, &mut b), 2);
+        assert_eq!(read(&gb, 0xd000, &mut b), 2);
     }
 
     #[test]

@@ -473,7 +473,6 @@ name = "inkdot-cheevos"
 version = "0.1.0"
 dependencies = [
  "cc",
- "inkdot-core",
  "libc",
 ]
 
