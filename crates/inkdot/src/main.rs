@@ -1024,25 +1024,18 @@ impl App {
                 self.ui.go_named(&name);
             }
             if self.debug.toast {
-                let said = ui::toast::Said {
-                    kind: ui::toast::Kind::Unlock,
-                    header: "Achievement unlocked",
-                    title: "A sample notice",
-                    detail: "INKDOT_DEBUG=toast put it here",
-                    points: 10,
-                    badge: None,
-                };
-                self.ui.notice(&said, Duration::from_secs(20));
+                self.ui.notice(
+                    ui::toast::Notice::unlock(
+                        "A sample notice",
+                        "INKDOT_DEBUG=toast put it here",
+                        10,
+                    )
+                    .shows(Duration::from_secs(20)),
+                );
                 // And the indicators: a measured achievement's progress, and a challenge with
                 // a gold badge.
-                let progress = ui::toast::Said {
-                    kind: ui::toast::Kind::Info,
-                    header: "",
-                    title: "3/10",
-                    detail: "A sample progress",
-                    points: 0,
-                    badge: None,
-                };
+                let progress =
+                    ui::toast::Said::new(ui::toast::Kind::Info, "3/10").detail("A sample progress");
                 self.ui.progress(Some(&progress));
                 let gold: Vec<u8> = [0xe8, 0xb8, 0x3c, 0xff].repeat(64 * 64);
                 self.ui.challenge(1, Some((gold, 64, 64)));

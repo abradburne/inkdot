@@ -40,7 +40,8 @@ The first version.
   state go to the log (`cheevos:` lines) and show over the game on the top screen, in DSlot's
   style (nibkit's `menu::toast`, the one DSperate shows): a placard as play begins (the game,
   Casual, how many of its achievements you have and how many can't be earned here), each
-  unlock for four seconds with its badge, the game completed. A measured achievement's
+  unlock for four seconds with its badge, the game completed, one after another (nibkit's
+  toast queue; an unlock waits a moment for a badge still being fetched). A measured achievement's
   progress and the badge of each achievement that can be earned right now show at the top
   right. Badges come from the cache DSlot fills (`~/.cache/retroachievements/badges`), fetched
   when missing. The package needs a nibkit tag newer than v0.1.0, which has no

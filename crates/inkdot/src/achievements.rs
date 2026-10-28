@@ -13,7 +13,6 @@ use inkdot_cheevos::badges::{self, Badges};
 use inkdot_cheevos::{Achievement, Client, Event, Settings, Summary};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
 
 /// The session, and what it shows over the game: the badges, fetched into the cache DSlot
 /// shares, and the challenges waiting for theirs.
@@ -37,6 +36,7 @@ impl Session {
         {
             let Some(pic) = decode(&file) else { continue };
             self.pictures.insert(name.clone(), pic.clone());
+            ui.badge(&name, pic.clone());
             for (_, id) in self.waiting.iter().filter(|(n, _)| *n == name) {
                 if ui.has_challenge(*id) {
                     ui.challenge(*id, Some(pic.clone()));
@@ -48,12 +48,16 @@ impl Session {
             match said {
                 Said::Nothing => {}
                 Said::Notice(n) => {
-                    let badge = n.badge.as_ref().and_then(|b| self.picture(b, ""));
-                    let mut s = n.said();
-                    if let Some((rgba, w, h)) = &badge {
-                        s.badge = Some((rgba, *w, *h));
+                    let mut toast = n.toast();
+                    if let Some(name) = &n.badge {
+                        toast = match self.picture(name, &n.badge_url) {
+                            Some((rgba, w, h)) => toast.badge(rgba, w, h),
+                            // On its way: the queue holds the notice a moment for it.
+                            None if self.badges.is_some() => toast.awaits_badge(name.as_str()),
+                            None => toast,
+                        };
                     }
-                    ui.notice(&s, n.shows);
+                    ui.notice(toast);
                 }
                 Said::Challenge(a) => {
                     let badge = self.picture(&a.badge_name, &a.badge_url);
@@ -65,16 +69,10 @@ impl Session {
                 Said::ChallengeOver(id) => ui.challenge_over(id),
                 Said::Progress(a) => {
                     let badge = self.picture(&a.badge_name, &a.badge_url);
-                    let mut s = ui::toast::Said {
-                        kind: ui::toast::Kind::Info,
-                        header: "",
-                        title: &a.measured_progress,
-                        detail: &a.title,
-                        points: 0,
-                        badge: None,
-                    };
+                    let mut s = ui::toast::Said::new(ui::toast::Kind::Info, &a.measured_progress)
+                        .detail(&a.title);
                     if let Some((rgba, w, h)) = &badge {
-                        s.badge = Some((rgba, *w, *h));
+                        s = s.badge(rgba, *w, *h);
                     }
                     ui.progress(Some(&s));
                 }
@@ -212,9 +210,9 @@ pub struct Notice {
     pub title: String,
     pub detail: String,
     pub points: u32,
-    /// The badge to show at the left, by the service's name for it.
+    /// The badge to show at the left, by the service's name for it, and where it is.
     pub badge: Option<String>,
-    pub shows: Duration,
+    pub badge_url: String,
 }
 
 impl Notice {
@@ -231,29 +229,23 @@ impl Notice {
             detail: detail.into(),
             points: 0,
             badge: None,
-            shows: match tone {
-                // DSperate's four seconds for an unlock.
-                Tone::Unlock => Duration::from_secs(4),
-                Tone::Info | Tone::Problem => Duration::from_millis(2500),
-            },
+            badge_url: String::new(),
         }
     }
 
-    /// The notice as nibkit's toast draws it.
-    pub fn said(&self) -> crate::ui::toast::Said<'_> {
-        use crate::ui::toast::Kind;
-        crate::ui::toast::Said {
-            kind: match self.tone {
-                Tone::Info => Kind::Info,
-                Tone::Unlock => Kind::Unlock,
-                Tone::Problem => Kind::Problem,
-            },
-            header: &self.header,
-            title: &self.title,
-            detail: &self.detail,
-            points: self.points,
-            badge: None,
-        }
+    /// The notice as nibkit's toast queue takes it, for its kind's time (DSperate's four
+    /// seconds for an unlock), without its badge.
+    pub fn toast(&self) -> ui::toast::Notice {
+        use ui::toast::Kind;
+        let kind = match self.tone {
+            Tone::Info => Kind::Info,
+            Tone::Unlock => Kind::Unlock,
+            Tone::Problem => Kind::Problem,
+        };
+        ui::toast::Notice::new(kind, self.title.as_str())
+            .header(self.header.as_str())
+            .detail(self.detail.as_str())
+            .points(self.points)
     }
 }
 
@@ -346,6 +338,7 @@ pub fn word(e: Event) -> Said {
             let mut n = Notice::new(Unlock, "Achievement unlocked", &a.title, &a.description);
             n.points = a.points;
             n.badge = (!a.badge_name.is_empty()).then_some(a.badge_name);
+            n.badge_url = a.badge_url;
             Said::Notice(n)
         }
         Event::ChallengeShown(a) => Said::Challenge(a),

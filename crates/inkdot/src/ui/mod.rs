@@ -26,17 +26,16 @@ pub type Picture = (Vec<u8>, usize, usize);
 
 /// A challenge's badge over the game, in units.
 const BADGE: f32 = 56.0;
-/// The widest the progress indicator is, in units.
-const PROGRESS_MOST: f32 = 340.0;
 
-/// Lays `pic` (straight alpha, from toast::draw) over `screen` (premultiplied) with its top left
-/// at `(x0, y0)` pixels; what falls outside is left out.
-fn lay_at(screen: &mut Canvas, pic: &Canvas, x0: usize, y0: usize) {
-    for y in 0..pic.h.min(screen.h.saturating_sub(y0)) {
-        for x in 0..pic.w.min(screen.w.saturating_sub(x0)) {
-            let s = (y * pic.w + x) * 4;
+/// Lays a toast's picture (straight alpha) over `screen` (premultiplied) with its top left at
+/// `(x0, y0)` pixels; what falls outside is left out.
+fn lay_at(screen: &mut Canvas, pic: &toast::Toast, x0: usize, y0: usize) {
+    let (w, h, px) = (pic.width(), pic.height(), pic.rgba());
+    for y in 0..h.min(screen.h.saturating_sub(y0)) {
+        for x in 0..w.min(screen.w.saturating_sub(x0)) {
+            let s = (y * w + x) * 4;
             let d = ((y0 + y) * screen.w + x0 + x) * 4;
-            put(&mut screen.px[d..d + 4], &pic.px[s..s + 4]);
+            put(&mut screen.px[d..d + 4], &px[s..s + 4]);
         }
     }
 }
@@ -269,14 +268,16 @@ pub struct Ui {
     dirty: bool,
     /// The top screen's overlay needs drawing again.
     top_dirty: bool,
-    /// A notice over the game in play (nibkit's toast), and when it goes.
-    notice: Option<(Canvas, std::time::Instant)>,
+    /// The notices over the game in play, one after another (nibkit's toast queue), and the
+    /// one last drawn (its serial).
+    notices: toast::Queue,
+    notice_drawn: Option<u64>,
     /// Achievements that can be earned right now (RetroAchievements' challenge indicators):
     /// their ids and badges, shown at the top right while the challenge lasts.
     challenges: Vec<(u32, Option<Picture>)>,
     /// A measured achievement's progress (RetroAchievements' progress indicator), drawn, at
     /// the top right.
-    progress: Option<Canvas>,
+    progress: Option<toast::Toast>,
     /// The Connections page's state while the menu is open (its worker stops when dropped),
     /// and what it last showed, to draw it again when that changes.
     conn: Option<Connections>,
@@ -332,7 +333,8 @@ impl Ui {
             top: Canvas::new(1.0),
             dirty: true,
             top_dirty: true,
-            notice: None,
+            notices: toast::Queue::new(),
+            notice_drawn: None,
             challenges: Vec::new(),
             progress: None,
             conn: None,
@@ -346,12 +348,16 @@ impl Ui {
         self.top_dirty = true;
     }
 
-    /// Puts a notice over the game for `shows` (DSperate's four seconds for an unlock): drawn
-    /// now, shown while the menu is closed, gone when the time is up. A new one replaces it.
-    pub fn notice(&mut self, said: &toast::Said, shows: std::time::Duration) {
-        let picture = toast::draw(&self.fonts, said, self.top.scale, toast::MOST);
-        self.notice = Some((picture, std::time::Instant::now() + shows));
-        self.top_dirty = true;
+    /// Queues a notice over the game: each shows for its time (DSperate's four seconds for an
+    /// unlock) once the ones before it have, while the menu is closed.
+    pub fn notice(&mut self, notice: toast::Notice) {
+        self.notices.push(notice);
+    }
+
+    /// A badge a notice awaits ([`toast::Notice::awaits_badge`]) has arrived.
+    #[cfg_attr(not(feature = "cheevos"), allow(dead_code))]
+    pub fn badge(&mut self, name: &str, (rgba, w, h): Picture) {
+        self.notices.badge(name, rgba, w, h);
     }
 
     /// An achievement can be earned right now: its badge (when there is one yet) stays up
@@ -379,7 +385,7 @@ impl Ui {
 
     /// A measured achievement's progress, up until `None`.
     pub fn progress(&mut self, said: Option<&toast::Said>) {
-        self.progress = said.map(|s| toast::draw(&self.fonts, s, self.top.scale, PROGRESS_MOST));
+        self.progress = said.map(|s| toast::draw(&self.fonts, s, self.top.scale));
         self.top_dirty = true;
     }
 
@@ -684,12 +690,12 @@ impl Ui {
     /// picture and details; `Some(None)` to show the game as it is (in play, and on the look's
     /// rows, so a change shows); `None` when nothing changed.
     pub fn render_top(&mut self, m: &Model) -> Option<Option<&[u8]>> {
-        if self
-            .notice
-            .as_ref()
-            .is_some_and(|(_, until)| std::time::Instant::now() >= *until)
-        {
-            self.notice = None;
+        let shown = self
+            .notices
+            .tick(std::time::Instant::now())
+            .map(toast::Shown::serial);
+        if shown != self.notice_drawn {
+            self.notice_drawn = shown;
             self.top_dirty = true;
         }
         if !std::mem::take(&mut self.top_dirty) {
@@ -702,19 +708,20 @@ impl Ui {
         if !self.menu {
             // In play: the notice, when one is up, at the bottom right; the achievement
             // indicators at the top right.
-            if self.notice.is_none() && self.progress.is_none() && self.challenges.is_empty() {
+            if self.notice_drawn.is_none() && self.progress.is_none() && self.challenges.is_empty()
+            {
                 return None;
             }
             let c = &mut self.top;
             c.px.fill(0);
-            if let Some((notice, _)) = &self.notice {
-                toast::lay(c, notice, toast::MARGIN);
+            if let Some(t) = self.notices.draw(&self.fonts, c.scale) {
+                toast::lay(c, t);
             }
             let m = (toast::MARGIN * c.scale).round() as usize;
             let mut y = m;
             if let Some(p) = &self.progress {
-                lay_at(c, p, c.w.saturating_sub(p.w + m), y);
-                y += p.h + m / 2;
+                lay_at(c, p, c.w.saturating_sub(p.width() + m), y);
+                y += p.height() + m / 2;
             }
             let side = (BADGE * c.scale).round() as usize;
             let mut x = c.w.saturating_sub(m);

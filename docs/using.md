@@ -84,7 +84,8 @@ On the top screen, at the bottom right:
 
 - as play begins, the game's placard: its title and `Casual: 12 of 40 unlocked` (and how many
   of them can't be earned in inkdot, when some read memory it doesn't offer);
-- each achievement you earn, for four seconds, with its badge and points;
+- each achievement you earn, for four seconds, with its badge and points (several in a row show
+  one after another);
 - `Completed` when you have them all, or a problem (the sign-in refused: sign in again on
   DSlot's Achievements tab; the service doesn't know this dump, a different revision or a
   patched one; offline, the unlocks wait and are sent when the connection returns).
