@@ -18,7 +18,7 @@ inkdot-cheevos = { path = "../inkdot-cheevos", optional = true }
 # nibOS's SDK library (github.com/abradburne/nibkit, MIT): the screens, vblank, buttons, touch,
 # brightness, paths, settings, the menu and DSlot's description format. To build against a local
 # checkout, patch it in from outside the repository (CONTRIBUTING.md, "nibkit").
-nibkit = { git = "https://github.com/abradburne/nibkit", tag = "v0.1.0", version = "0.1", default-features = false, features = ["menu-raster"] }
+nibkit = { git = "https://github.com/abradburne/nibkit", tag = "v0.1.2", version = "0.1", default-features = false, features = ["menu-raster"] }
 # SDL2's API, linked against the system's SDL2 (sdl2-compat on SDL3), as DSlot does.
 sdl2 = "0.38"
 glow = "0.14"

@@ -44,8 +44,7 @@ The first version.
   toast queue; an unlock waits a moment for a badge still being fetched). A measured achievement's
   progress and the badge of each achievement that can be earned right now show at the top
   right. Badges come from the cache DSlot fills (`~/.cache/retroachievements/badges`), fetched
-  when missing. The package needs a nibkit tag newer than v0.1.0, which has no
-  `menu::toast`.
+  when missing. Built on nibkit 0.1.2 (`menu::toast` and its queue).
 - **inkdot-cheevos** knows neither the Game Boy nor English, for DSlot and nibcase to use too:
   the emulator reads its memory for it through a `Memory` trait, is told what happened in
   typed `Event`s, and passes `Settings` (hardcore, encore, unofficial); the C shim hands Rust
