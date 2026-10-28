@@ -15,7 +15,7 @@
 
 pkgname=inkdot
 pkgver=0.1.0
-pkgrel=8
+pkgrel=9
 pkgdesc="Game Boy and Game Boy Color emulator for the Anbernic RG DS+, started from DSlot"
 arch=(aarch64)
 url="https://github.com/abradburne/inkdot"
