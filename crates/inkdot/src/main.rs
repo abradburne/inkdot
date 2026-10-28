@@ -72,11 +72,12 @@ const CHEEVOS_SECTION: &[u8; 4] = b"RACH";
 
 /// INKDOT_DEBUG: `stats` logs pacing and sound every five seconds; `cheevos` logs every
 /// RetroAchievements request; `toast` shows a sample notice and achievement indicators over the
-/// game; `shot=DIR` saves both screens as PNG files there ten seconds in; `latency` logs, for each change of the buttons,
-/// when the frame that read it started and the vblank at which it was shown (CLOCK_MONOTONIC
-/// ns, comparable with nibOS's latency tools); `frames=FILE` writes a line per frame on leaving:
-/// the vblank it followed, when it started, finished the game, finished drawing and swapping,
-/// and the CPU's clock then (CLOCK_MONOTONIC µs, kHz). For checking a build on the handheld.
+/// game; `shot=DIR` saves both screens as PNG files there ten seconds in; `latency` logs, for
+/// each change of the buttons, when the frame that read it started and the vblank at which it
+/// was shown (CLOCK_MONOTONIC ns, comparable with nibOS's latency tools); `frames=FILE` writes
+/// a line per frame on leaving: the vblank it followed, when it started, finished the game,
+/// finished drawing and swapping, and the CPU's clock then (CLOCK_MONOTONIC µs, kHz). For
+/// checking a build on the handheld.
 #[derive(Clone, Debug, Default)]
 struct Debug {
     stats: bool,
