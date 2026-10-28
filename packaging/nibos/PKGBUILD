@@ -8,17 +8,20 @@
 #
 #   cd packaging/nibos && PKGDEST="$PWD/out" BUILDDIR="$HOME/makepkg-build" makepkg -f --nodeps
 #
-# (--nodeps: the build machine needs Rust and SDL2, not what inkdot needs to run.)
+# (--nodeps: the build machine needs Rust, a C compiler and SDL2, not what inkdot needs to run.)
+#
+# RetroAchievements is on (feature `cheevos`: rcheevos built in, `curl` at run time): DSlot's
+# sign-in reaches inkdot through RA_TOKEN_FILE (DSlot's docs/retroachievements.md).
 
 pkgname=inkdot
 pkgver=0.1.0
-pkgrel=2
+pkgrel=3
 pkgdesc="Game Boy and Game Boy Color emulator for the Anbernic RG DS+, started from DSlot"
 arch=(aarch64)
 url="https://github.com/abradburne/inkdot"
 license=('MIT OR Apache-2.0')
-depends=(sdl2-compat)
-makedepends=(cargo)
+depends=(sdl2-compat curl)   # curl: carries the requests to RetroAchievements
+makedepends=(cargo gcc)   # gcc: rcheevos, the RetroAchievements client library
 optdepends=('dslot: the game shelf that starts it')
 
 _root=$(cd "$startdir/../.." && pwd)
@@ -56,13 +59,13 @@ prepare() {
 
 build() {
     cd "$srcdir/inkdot"
-    cargo build --release --frozen -p inkdot --features dslot
+    cargo build --release --frozen -p inkdot --features dslot,cheevos
 }
 
 check() {
     cd "$srcdir/inkdot"
     # The test ROM suites skip here (the ROMs aren't part of the sources); make check runs them.
-    cargo test --release --frozen -p inkdot-core -p inkdot --features inkdot/dslot
+    cargo test --release --frozen -p inkdot-core -p inkdot -p inkdot-cheevos --features inkdot/dslot,inkdot/cheevos
 }
 
 package() {
@@ -71,6 +74,8 @@ package() {
     install -Dm644 packaging/nibos/inkdot.toml "$pkgdir/usr/share/dslot/emulators/inkdot.toml"
     install -Dm644 -t "$pkgdir/usr/share/doc/inkdot" README.md CHANGELOG.md docs/*.md
     install -Dm644 -t "$pkgdir/usr/share/licenses/inkdot" LICENSE-MIT LICENSE-APACHE THIRD-PARTY.md
+    # rcheevos (MIT), built in for RetroAchievements: its notice goes with every copy.
+    install -Dm644 crates/inkdot-cheevos/rcheevos/LICENSE "$pkgdir/usr/share/licenses/inkdot/LICENSE.rcheevos"
     # The Roboto Condensed fonts built in (through nibkit) are under the SIL OFL 1.1.
     install -Dm644 LICENSE-OFL "$pkgdir/usr/share/licenses/inkdot/OFL.txt"
 }
