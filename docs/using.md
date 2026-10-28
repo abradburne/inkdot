@@ -78,17 +78,31 @@ inkdot's (`~/.config/inkdot/`, or beside the program on the stock OS).
 Sign in once, on DSlot's **Achievements** tab. From then on every game DSlot starts gets the
 sign-in (the token DSlot kept, never the password) in its environment, and inkdot signs in with
 it, looks the game up by its ROM's hash and, when the service has a set for it, checks the
-achievements as you play. The log (`nib bug-report`, or `journalctl -u dslot`) says what
-happened, one `cheevos:` line each: `Signed in to RetroAchievements -- <you>`, `<game> --
-achievements active`, `Achievement unlocked: <title> (<points>) -- <what for>`, or `No
-achievements for this ROM` when the service doesn't know the dump (a different revision, or a
-patched one). Nothing shows on the screens yet.
+achievements as you play.
 
-inkdot plays **softcore** only: save states, fast-forward and the resume point all stay usable.
-Loading a state or restarting the game starts the achievements' progress over (what you were
-part way through is checked again from the start), so a jump in the game can't unlock anything.
-DSlot's **Mode: Hardcore** is noted in the log and played as softcore. Started by hand, without
-DSlot, there is no sign-in and no session.
+On the top screen, at the bottom right:
+
+- as play begins, the game's placard: its title and `Casual: 12 of 40 unlocked` (and how many
+  of them can't be earned in inkdot, when some read memory it doesn't offer);
+- each achievement you earn, for four seconds, with its badge and points;
+- `Completed` when you have them all, or a problem (the sign-in refused: sign in again on
+  DSlot's Achievements tab; the service doesn't know this dump, a different revision or a
+  patched one; offline, the unlocks wait and are sent when the connection returns).
+
+At the top right, while they last: how far you are with an achievement that counts something
+(`3/10` over its title), and the badge of each achievement you can earn right now. Badges are
+kept with DSlot's in `~/.cache/retroachievements/badges` and fetched when one isn't there.
+
+The log (`nib bug-report`, or `journalctl -u dslot`) says the same, one `cheevos:` line each:
+`Signed in -- <you>`, `<game> -- Casual: 12 of 40 unlocked`, `Achievement unlocked: <title>
+(<points>) -- <what for>`, `No achievements for this ROM -- ... (hash <md5>)`.
+
+inkdot plays **Casual** (softcore) only: save states, fast-forward and the resume point all stay
+usable. A save state keeps how far each achievement had got (hit counts and the like), and
+loading it brings that back, so a state loaded mid-way through something doesn't lose it; a
+state saved before this, or restarting the game, starts the achievements' progress over. DSlot's
+**Mode: Hardcore** is noted in the log and played as Casual. Started by hand, without DSlot,
+there is no sign-in and no session.
 
 ## Files
 

@@ -34,8 +34,20 @@ The first version.
   DSlot's Achievements tab (the token file DSlot passes as `RA_TOKEN_FILE`; never a password),
   the game identified by its ROM's MD5, its set evaluated once a frame by rcheevos over the
   service's Game Boy address space (the bus, then the Color's work-RAM and cartridge-RAM
-  banks). Softcore only: save states and fast-forward stay usable; a state load or a restart
-  starts the set's progress over. Unlocks and the session's state go to the log (`cheevos:`
-  lines) and show over the game on the top screen for four seconds, in DSlot's style: nibkit's
-  `menu::toast`, the one DSperate shows. The package needs a nibkit tag newer than v0.1.0,
-  which has no `menu::toast`.
+  banks). Casual (softcore) only: save states and fast-forward stay usable. The set's progress
+  goes with each save state and the resume point and comes back with it, as rcheevos asks (a
+  state without any starts the set over, and so does a restart). Unlocks and the session's
+  state go to the log (`cheevos:` lines) and show over the game on the top screen, in DSlot's
+  style (nibkit's `menu::toast`, the one DSperate shows): a placard as play begins (the game,
+  Casual, how many of its achievements you have and how many can't be earned here), each
+  unlock for four seconds with its badge, the game completed. A measured achievement's
+  progress and the badge of each achievement that can be earned right now show at the top
+  right. Badges come from the cache DSlot fills (`~/.cache/retroachievements/badges`), fetched
+  when missing. The package needs a nibkit tag newer than v0.1.0, which has no
+  `menu::toast`.
+- **inkdot-cheevos** knows neither the Game Boy nor English, for DSlot and nibcase to use too:
+  the emulator reads its memory for it through a `Memory` trait, is told what happened in
+  typed `Event`s, and passes `Settings` (hardcore, encore, unofficial); the C shim hands Rust
+  structs of its own, checked against the C side by a test. Network failures reach rcheevos as
+  the retryable error it expects, with the reason; the User-Agent carries rcheevos' own
+  clause.
