@@ -90,8 +90,11 @@ On the top screen, at the bottom right:
   DSlot's Achievements tab; the service doesn't know this dump, a different revision or a
   patched one; offline, the unlocks wait and are sent when the connection returns).
 
-At the top right, while they last: how far you are with an achievement that counts something
-(`3/10` over its title), and the badge of each achievement you can earn right now. Badges are
+At the bottom left, while they last, the same panels as DSperate's: how far you are with an
+achievement that counts something (*Progress*, its title, `3/10`), and under it a *Challenge*
+panel for each achievement you can earn right now (finish without being hit, say), its badge in
+a gold ring that pulses slowly; when the challenge is the achievement in progress, the two are
+one panel. Badges are
 kept with DSlot's in `~/.cache/retroachievements/badges` and fetched when one isn't there.
 
 The log (`nib bug-report`, or `journalctl -u dslot`) says the same, one `cheevos:` line each:

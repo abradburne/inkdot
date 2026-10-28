@@ -112,7 +112,7 @@ fn main() {
         }
         let bottom = ui.render(&m).unwrap().to_vec();
         save(out.join(format!("{name}-bottom.png")), &bottom);
-        if let Some(Some(top)) = ui.render_top(&m) {
+        if let Some(ui::Top::Whole(top)) = ui.render_top(&m) {
             save(out.join(format!("{name}-top.png")), top);
         }
     }

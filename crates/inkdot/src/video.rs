@@ -381,6 +381,42 @@ impl Video {
         }
     }
 
+    /// Uploads a rectangle of the top screen's overlay (`rgba` is the whole screen, as for
+    /// [`Video::set_overlay`]), the rest as it was: a challenge's ring moving on.
+    pub fn set_overlay_part(&mut self, rgba: &[u8], (x, y, w, h): (usize, usize, usize, usize)) {
+        let (sw, sh) = (screens::WIDTH as usize, screens::HEIGHT as usize);
+        if !self.overlay_on
+            || w == 0
+            || h == 0
+            || x + w > sw
+            || y + h > sh
+            || rgba.len() < sw * sh * 4
+        {
+            self.set_overlay(Some(rgba));
+            return;
+        }
+        let part: Vec<u8> = (y..y + h)
+            .flat_map(|row| &rgba[(row * sw + x) * 4..(row * sw + x + w) * 4])
+            .copied()
+            .collect();
+        let gl = &self.gl;
+        // SAFETY: as above; `part` is `w` x `h` pixels inside the texture.
+        unsafe {
+            gl.bind_texture(glow::TEXTURE_2D, Some(self.overlay));
+            gl.tex_sub_image_2d(
+                glow::TEXTURE_2D,
+                0,
+                x as i32,
+                y as i32,
+                w as i32,
+                h as i32,
+                glow::RGBA,
+                glow::UNSIGNED_BYTE,
+                glow::PixelUnpackData::Slice(&part),
+            );
+        }
+    }
+
     /// Uploads the bottom screen's picture (1024×768 RGBA).
     pub fn upload_ui(&mut self, rgba: &[u8]) {
         self.upload(self.ui, rgba);

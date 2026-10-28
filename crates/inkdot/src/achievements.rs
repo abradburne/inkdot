@@ -15,14 +15,12 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 /// The session, and what it shows over the game: the badges, fetched into the cache DSlot
-/// shares, and the challenges waiting for theirs.
+/// shares.
 pub struct Session {
     pub client: Client,
     badges: Option<Badges>,
     /// Badges decoded, by name.
     pictures: HashMap<String, Picture>,
-    /// Challenges up without their badge yet: the badge's name and the achievement's id.
-    waiting: Vec<(String, u32)>,
 }
 
 impl Session {
@@ -36,13 +34,8 @@ impl Session {
         {
             let Some(pic) = decode(&file) else { continue };
             self.pictures.insert(name.clone(), pic.clone());
-            ui.badge(&name, pic.clone());
-            for (_, id) in self.waiting.iter().filter(|(n, _)| *n == name) {
-                if ui.has_challenge(*id) {
-                    ui.challenge(*id, Some(pic.clone()));
-                }
-            }
-            self.waiting.retain(|(n, _)| *n != name);
+            // To the notices and indicators awaiting it.
+            ui.badge(&name, pic);
         }
         for said in said(&mut self.client) {
             match said {
@@ -50,34 +43,35 @@ impl Session {
                 Said::Notice(n) => {
                     let mut toast = n.toast();
                     if let Some(name) = &n.badge {
-                        toast = match self.picture(name, &n.badge_url) {
-                            Some((rgba, w, h)) => toast.badge(rgba, w, h),
-                            // On its way: the queue holds the notice a moment for it.
-                            None if self.badges.is_some() => toast.awaits_badge(name.as_str()),
-                            None => toast,
-                        };
+                        toast = self.with_badge(toast, name, &n.badge_url);
                     }
                     ui.notice(toast);
                 }
                 Said::Challenge(a) => {
-                    let badge = self.picture(&a.badge_name, &a.badge_url);
-                    if badge.is_none() {
-                        self.waiting.push((a.badge_name.clone(), a.id));
-                    }
-                    ui.challenge(a.id, badge);
+                    let n = ui::toast::Notice::challenge(a.title.as_str());
+                    ui.challenge(a.id, self.with_badge(n, &a.badge_name, &a.badge_url));
                 }
                 Said::ChallengeOver(id) => ui.challenge_over(id),
                 Said::Progress(a) => {
-                    let badge = self.picture(&a.badge_name, &a.badge_url);
-                    let mut s = ui::toast::Said::new(ui::toast::Kind::Info, &a.measured_progress)
-                        .detail(&a.title);
-                    if let Some((rgba, w, h)) = &badge {
-                        s = s.badge(rgba, *w, *h);
-                    }
-                    ui.progress(Some(&s));
+                    let n =
+                        ui::toast::Notice::progress(a.title.as_str(), a.measured_progress.as_str());
+                    ui.progress(a.id, self.with_badge(n, &a.badge_name, &a.badge_url));
                 }
-                Said::ProgressOver => ui.progress(None),
+                Said::ProgressOver => ui.hide_progress(),
             }
+        }
+    }
+
+    /// `n` with the badge `name` when it is decoded or in the cache; else awaiting it while it
+    /// is fetched (nibkit holds a notice or an indicator a moment for it).
+    fn with_badge(&mut self, n: ui::toast::Notice, name: &str, url: &str) -> ui::toast::Notice {
+        if name.is_empty() {
+            return n;
+        }
+        match self.picture(name, url) {
+            Some((rgba, w, h)) => n.badge(rgba, w, h),
+            None if self.badges.is_some() => n.awaits_badge(name),
+            None => n,
         }
     }
 
@@ -169,7 +163,6 @@ pub fn start(rom: &[u8], color: bool, verbose: bool) -> Option<Session> {
         client,
         badges,
         pictures: HashMap::new(),
-        waiting: Vec::new(),
     })
 }
 

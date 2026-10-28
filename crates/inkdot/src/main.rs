@@ -1032,21 +1032,37 @@ impl App {
                     )
                     .shows(Duration::from_secs(20)),
                 );
-                // And the indicators: a measured achievement's progress, and a challenge with
-                // a gold badge.
-                let progress =
-                    ui::toast::Said::new(ui::toast::Kind::Info, "3/10").detail("A sample progress");
-                self.ui.progress(Some(&progress));
-                let gold: Vec<u8> = [0xe8, 0xb8, 0x3c, 0xff].repeat(64 * 64);
-                self.ui.challenge(1, Some((gold, 64, 64)));
+                // And the indicators: a measured achievement's progress, and two challenges with
+                // badges, one of them for the achievement in progress (one panel with it).
+                use ui::toast::Notice;
+                let badge = |c: [u8; 4]| c.repeat(64 * 64);
+                self.ui.progress(
+                    1,
+                    Notice::progress("A sample progress", "3/10").badge(
+                        badge([0x3c, 0x8c, 0xe8, 0xff]),
+                        64,
+                        64,
+                    ),
+                );
+                self.ui.challenge(1, Notice::challenge("A sample progress"));
+                self.ui.challenge(
+                    2,
+                    Notice::challenge("A sample challenge").badge(
+                        badge([0xe8, 0xb8, 0x3c, 0xff]),
+                        64,
+                        64,
+                    ),
+                );
             }
         }
         if self.debug.cycle_looks {
             self.cycle_looks();
         }
-        if let Some(overlay) = self.ui.render_top(&self.model) {
-            let overlay = overlay.map(<[u8]>::to_vec);
-            self.video.set_overlay(overlay.as_deref());
+        match self.ui.render_top(&self.model) {
+            None => {}
+            Some(ui::Top::Game) => self.video.set_overlay(None),
+            Some(ui::Top::Whole(px)) => self.video.set_overlay(Some(px)),
+            Some(ui::Top::Part(px, rect)) => self.video.set_overlay_part(px, rect),
         }
         let shoot = self.debug.shot.is_some() && self.frame_count == 600;
         let series = self.debug.shots.is_some() && self.frame_count.is_multiple_of(120);

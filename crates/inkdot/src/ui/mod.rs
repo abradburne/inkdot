@@ -19,60 +19,30 @@ use nibkit::menu::{
 use nibkit::settings::Value as Setting;
 
 // The toast over the game is nibkit's, the same as DSperate's.
+use nibkit::menu::indicators::Indicators;
 pub use nibkit::menu::toast;
 
 /// A picture to lay over the game: RGBA with straight alpha, its width and height.
 pub type Picture = (Vec<u8>, usize, usize);
 
-/// A challenge's badge over the game, in units.
-const BADGE: f32 = 56.0;
+/// A rectangle on the top screen, in pixels: left, top, width, height.
+pub type Rect = (usize, usize, usize, usize);
 
-/// Lays a toast's picture (straight alpha) over `screen` (premultiplied) with its top left at
-/// `(x0, y0)` pixels; what falls outside is left out.
-fn lay_at(screen: &mut Canvas, pic: &toast::Toast, x0: usize, y0: usize) {
-    let (w, h, px) = (pic.width(), pic.height(), pic.rgba());
-    for y in 0..h.min(screen.h.saturating_sub(y0)) {
-        for x in 0..w.min(screen.w.saturating_sub(x0)) {
-            let s = (y * w + x) * 4;
-            let d = ((y0 + y) * screen.w + x0 + x) * 4;
-            put(&mut screen.px[d..d + 4], &px[s..s + 4]);
-        }
-    }
+/// What the top screen shows over the game, when it has changed ([`Ui::render_top`]).
+#[derive(Debug, PartialEq, Eq)]
+pub enum Top<'a> {
+    /// The game as it is.
+    Game,
+    /// This over it: premultiplied RGBA, the whole screen.
+    Whole(&'a [u8]),
+    /// The same screen as before but for this rectangle (a challenge's ring moving on): only it
+    /// need go to the GPU.
+    Part(&'a [u8], Rect),
 }
 
-/// Lays a badge over `screen`, scaled to `side` pixels square (bilinear), its top left at
-/// `(x0, y0)`.
-fn lay_badge(screen: &mut Canvas, (rgba, w, h): &Picture, x0: usize, y0: usize, side: usize) {
-    let (w, h) = (*w, *h);
-    if w == 0 || h == 0 || side == 0 || rgba.len() < w * h * 4 {
-        return;
-    }
-    let at = |x: usize, y: usize, k: usize| rgba[(y.min(h - 1) * w + x.min(w - 1)) * 4 + k] as f32;
-    for y in 0..side.min(screen.h.saturating_sub(y0)) {
-        let fy = ((y as f32 + 0.5) * h as f32 / side as f32 - 0.5).max(0.0);
-        let (y1, ty) = (fy as usize, fy.fract());
-        for x in 0..side.min(screen.w.saturating_sub(x0)) {
-            let fx = ((x as f32 + 0.5) * w as f32 / side as f32 - 0.5).max(0.0);
-            let (x1, tx) = (fx as usize, fx.fract());
-            let mut px = [0u8; 4];
-            for (k, p) in px.iter_mut().enumerate() {
-                let top = at(x1, y1, k) * (1.0 - tx) + at(x1 + 1, y1, k) * tx;
-                let bottom = at(x1, y1 + 1, k) * (1.0 - tx) + at(x1 + 1, y1 + 1, k) * tx;
-                *p = (top * (1.0 - ty) + bottom * ty).round() as u8;
-            }
-            let d = ((y0 + y) * screen.w + x0 + x) * 4;
-            put(&mut screen.px[d..d + 4], &px);
-        }
-    }
-}
-
-/// One straight-alpha pixel onto a premultiplied one, replacing it.
-fn put(d: &mut [u8], s: &[u8]) {
-    let a = s[3] as u32;
-    for k in 0..3 {
-        d[k] = ((s[k] as u32 * a + 127) / 255) as u8;
-    }
-    d[3] = a as u8;
+/// Whether two rectangles share a pixel.
+fn overlap(a: Rect, b: Rect) -> bool {
+    a.0 < b.0 + b.2 && b.0 < a.0 + a.2 && a.1 < b.1 + b.3 && b.1 < a.1 + a.3
 }
 
 // The Connections page (Wi-Fi, Bluetooth, the paired devices) is nibkit's, on nibOS; elsewhere
@@ -272,12 +242,13 @@ pub struct Ui {
     /// one last drawn (its serial).
     notices: toast::Queue,
     notice_drawn: Option<u64>,
-    /// Achievements that can be earned right now (RetroAchievements' challenge indicators):
-    /// their ids and badges, shown at the top right while the challenge lasts.
-    challenges: Vec<(u32, Option<Picture>)>,
-    /// A measured achievement's progress (RetroAchievements' progress indicator), drawn, at
-    /// the top right.
-    progress: Option<toast::Toast>,
+    /// RetroAchievements' progress and challenge indicators (nibkit's, the same as DSperate's),
+    /// bottom left while they last; what their last tick gave, and where they and the notice
+    /// were last laid on the top screen.
+    indicators: Indicators,
+    indicators_shown: u64,
+    stack_at: Option<Rect>,
+    notice_at: Option<Rect>,
     /// The Connections page's state while the menu is open (its worker stops when dropped),
     /// and what it last showed, to draw it again when that changes.
     conn: Option<Connections>,
@@ -335,8 +306,10 @@ impl Ui {
             top_dirty: true,
             notices: toast::Queue::new(),
             notice_drawn: None,
-            challenges: Vec::new(),
-            progress: None,
+            indicators: Indicators::new(),
+            indicators_shown: 0,
+            stack_at: None,
+            notice_at: None,
             conn: None,
             conn_seen: None,
         }
@@ -354,39 +327,35 @@ impl Ui {
         self.notices.push(notice);
     }
 
-    /// A badge a notice awaits ([`toast::Notice::awaits_badge`]) has arrived.
+    /// A badge a notice or an indicator awaits ([`toast::Notice::awaits_badge`]) has arrived.
     #[cfg_attr(not(feature = "cheevos"), allow(dead_code))]
     pub fn badge(&mut self, name: &str, (rgba, w, h): Picture) {
+        self.indicators.badge(name, rgba.clone(), w, h);
         self.notices.badge(name, rgba, w, h);
     }
 
-    /// An achievement can be earned right now: its badge (when there is one yet) stays up
-    /// until [`Ui::challenge_over`].
-    pub fn challenge(&mut self, id: u32, badge: Option<Picture>) {
-        match self.challenges.iter_mut().find(|(i, _)| *i == id) {
-            Some(c) => c.1 = badge.or(c.1.take()),
-            None => self.challenges.push((id, badge)),
-        }
-        self.top_dirty = true;
+    /// Achievement `id` can be earned right now ([`toast::Notice::challenge`], with its badge or
+    /// awaiting it): its panel stays up until [`Ui::challenge_over`].
+    pub fn challenge(&mut self, id: u32, notice: toast::Notice) {
+        self.indicators.challenge(id, notice);
     }
 
     /// The challenge is over.
     #[cfg_attr(not(feature = "cheevos"), allow(dead_code))]
     pub fn challenge_over(&mut self, id: u32) {
-        self.challenges.retain(|(i, _)| *i != id);
-        self.top_dirty = true;
+        self.indicators.end_challenge(id);
     }
 
-    /// Whether achievement `id`'s challenge is up.
+    /// Achievement `id`'s measured progress ([`toast::Notice::progress`]), up or updated until
+    /// [`Ui::hide_progress`].
+    pub fn progress(&mut self, id: u32, notice: toast::Notice) {
+        self.indicators.progress(id, notice);
+    }
+
+    /// The progress comes down.
     #[cfg_attr(not(feature = "cheevos"), allow(dead_code))]
-    pub fn has_challenge(&self, id: u32) -> bool {
-        self.challenges.iter().any(|(i, _)| *i == id)
-    }
-
-    /// A measured achievement's progress, up until `None`.
-    pub fn progress(&mut self, said: Option<&toast::Said>) {
-        self.progress = said.map(|s| toast::draw(&self.fonts, s, self.top.scale));
-        self.top_dirty = true;
+    pub fn hide_progress(&mut self) {
+        self.indicators.hide_progress();
     }
 
     pub fn go(&mut self, page: Page) {
@@ -685,52 +654,78 @@ impl Ui {
         Some(&self.bottom.px)
     }
 
-    /// What goes over the game on the top screen, when it has changed since last asked:
-    /// `Some(Some(px))`, premultiplied RGBA, the game dimmed with "Paused" or a save state's
-    /// picture and details; `Some(None)` to show the game as it is (in play, and on the look's
-    /// rows, so a change shows); `None` when nothing changed.
-    pub fn render_top(&mut self, m: &Model) -> Option<Option<&[u8]>> {
-        let shown = self
-            .notices
-            .tick(std::time::Instant::now())
-            .map(toast::Shown::serial);
+    /// What goes over the game on the top screen, when it has changed since last asked: the game
+    /// dimmed with "Paused" or a save state's picture and details; in play, the notice and the
+    /// achievement indicators; [`Top::Game`] to show the game as it is (in play with nothing over
+    /// it, and on the look's rows, so a change shows); `None` when nothing changed. While a
+    /// challenge's ring pulses, the indicators change 16 times a second, and only their
+    /// rectangle is laid again ([`Top::Part`]).
+    pub fn render_top(&mut self, m: &Model) -> Option<Top<'_>> {
+        let now = std::time::Instant::now();
+        let shown = self.notices.tick(now).map(toast::Shown::serial);
         if shown != self.notice_drawn {
             self.notice_drawn = shown;
             self.top_dirty = true;
         }
+        let up = self.indicators.tick(now);
+        // Over the menu's pictures they aren't shown: drawn again when it closes.
+        let moved = up != self.indicators_shown && !self.menu;
+        self.indicators_shown = up;
+        if moved && !self.top_dirty {
+            if let Some(r) = self.relay_indicators() {
+                return Some(Top::Part(&self.top.px, r));
+            }
+        }
+        self.top_dirty |= moved;
         if !std::mem::take(&mut self.top_dirty) {
             return None;
         }
-        Some(self.overlay(m))
+        Some(match self.overlay(m) {
+            Some(px) => Top::Whole(px),
+            None => Top::Game,
+        })
+    }
+
+    /// The indicators laid again where they were, when they still cover the same rectangle
+    /// and the notice isn't in it: that rectangle.
+    fn relay_indicators(&mut self) -> Option<Rect> {
+        let was = self.stack_at?;
+        let s = self
+            .indicators
+            .draw(&self.fonts, (self.top.w, self.top.h))?;
+        let (x, y) = s.place();
+        let at = (x, y, s.width(), s.height());
+        if at != was || self.notice_at.is_some_and(|n| overlap(n, at)) {
+            return None;
+        }
+        let c = &mut self.top;
+        for row in y..y + at.3 {
+            c.px[(row * c.w + x) * 4..(row * c.w + x + at.2) * 4].fill(0);
+        }
+        s.lay(c);
+        Some(at)
     }
 
     fn overlay(&mut self, m: &Model) -> Option<&[u8]> {
+        self.stack_at = None;
+        self.notice_at = None;
         if !self.menu {
             // In play: the notice, when one is up, at the bottom right; the achievement
-            // indicators at the top right.
-            if self.notice_drawn.is_none() && self.progress.is_none() && self.challenges.is_empty()
-            {
+            // indicators at the bottom left.
+            if self.notice_drawn.is_none() && self.indicators_shown == 0 {
                 return None;
             }
             let c = &mut self.top;
             c.px.fill(0);
             if let Some(t) = self.notices.draw(&self.fonts, c.scale) {
                 toast::lay(c, t);
+                let (x, y) = t.place((c.w, c.h));
+                self.notice_at = Some((x, y, t.width(), t.height()));
             }
-            let m = (toast::MARGIN * c.scale).round() as usize;
-            let mut y = m;
-            if let Some(p) = &self.progress {
-                lay_at(c, p, c.w.saturating_sub(p.width() + m), y);
-                y += p.height() + m / 2;
-            }
-            let side = (BADGE * c.scale).round() as usize;
-            let mut x = c.w.saturating_sub(m);
-            for (_, badge) in &self.challenges {
-                if let Some(b) = badge {
-                    x = x.saturating_sub(side);
-                    lay_badge(c, b, x, y, side);
-                    x = x.saturating_sub(m / 2);
-                }
+            if let Some(s) = self.indicators.draw(&self.fonts, (c.w, c.h)) {
+                s.lay(c);
+                let (x, y) = s.place();
+                self.stack_at = Some((x, y, s.width(), s.height()));
             }
             return Some(&c.px);
         }
@@ -1061,7 +1056,7 @@ mod tests {
         assert_eq!(ui.tap(&m, 500, 400), Some(Action::OpenMenu));
         assert_eq!(
             ui.render_top(&m),
-            Some(None),
+            Some(Top::Game),
             "nothing over the game in play"
         );
         ui.open_menu();
@@ -1072,10 +1067,41 @@ mod tests {
             .chunks(4)
             .any(|p| p[..3] != [0, 0, 0]));
         assert!(
-            matches!(ui.render_top(&m), Some(Some(_))),
+            matches!(ui.render_top(&m), Some(Top::Whole(_))),
             "Paused over the game"
         );
         assert_eq!(ui.render_top(&m), None, "drawn once");
+    }
+
+    #[test]
+    fn the_indicators_sit_bottom_left_and_only_the_ring_goes_again() {
+        let mut ui = Ui::new();
+        let m = model();
+        let badge = [200u8, 90, 40, 255].repeat(16 * 16);
+        ui.progress(1, toast::Notice::progress("Collector", "3/10"));
+        ui.challenge(
+            2,
+            toast::Notice::challenge("No Damage").badge(badge, 16, 16),
+        );
+        let Some(Top::Whole(px)) = ui.render_top(&m) else {
+            panic!("drawn whole first");
+        };
+        // Bottom left, the margin in: the panel there, the bottom right clear.
+        let at = |x: usize, y: usize| px[(y * 1024 + x) * 4 + 3];
+        assert_ne!(at(16 + 30, 768 - 16 - 30), 0);
+        assert_eq!(at(1024 - 16 - 30, 768 - 16 - 30), 0);
+        let (x, y, w, h) = ui.stack_at.unwrap();
+        assert_eq!((x, y + h), (16, 768 - 16));
+        // A step of the ring later: only the indicators' rectangle, the rest kept.
+        std::thread::sleep(std::time::Duration::from_millis(80));
+        let Some(Top::Part(_, part)) = ui.render_top(&m) else {
+            panic!("the ring alone");
+        };
+        assert_eq!(part, (x, y, w, h));
+        // Over: the game as it is.
+        ui.hide_progress();
+        ui.challenge_over(2);
+        assert_eq!(ui.render_top(&m), Some(Top::Game));
     }
 
     #[test]
@@ -1113,7 +1139,7 @@ mod tests {
         assert_eq!(ui.nav(&m, Nav::X), None, "slot 2 holds a state: X again");
         assert_eq!(ui.nav(&m, Nav::X), Some(Action::Save(2)));
         assert!(
-            matches!(ui.render_top(&m), Some(Some(_))),
+            matches!(ui.render_top(&m), Some(Top::Whole(_))),
             "its picture on the top screen"
         );
         // With a resume point it comes first, left of slot 1: it loads but takes no save.
@@ -1145,7 +1171,7 @@ mod tests {
         ui.nav(&m, Nav::R);
         assert_eq!(ui.page, Page::Game);
         // On the look's row the game shows as it is (to see the change).
-        assert_eq!(ui.render_top(&m), Some(None));
+        assert_eq!(ui.render_top(&m), Some(Top::Game));
         assert_eq!(
             ui.nav(&m, Nav::Right),
             Some(Action::Set {

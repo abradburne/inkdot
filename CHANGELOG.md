@@ -42,9 +42,12 @@ The first version.
   Casual, how many of its achievements you have and how many can't be earned here), each
   unlock for four seconds with its badge, the game completed, one after another (nibkit's
   toast queue; an unlock waits a moment for a badge still being fetched). A measured achievement's
-  progress and the badge of each achievement that can be earned right now show at the top
-  right. Badges come from the cache DSlot fills (`~/.cache/retroachievements/badges`), fetched
-  when missing. Built on nibkit 0.1.2 (`menu::toast` and its queue).
+  progress and each achievement that can be earned right now show at the bottom left while they
+  last, nibkit's indicator panels (the same as DSperate's): *Progress* at the top, a *Challenge*
+  panel each under it, its badge in a slowly pulsing gold ring, one panel for a challenge on
+  the achievement in progress. Badges come from the cache DSlot fills
+  (`~/.cache/retroachievements/badges`), fetched when missing. Built on nibkit 0.1.3
+  (`menu::toast` and its queue, `menu::indicators`).
 - **inkdot-cheevos** knows neither the Game Boy nor English, for DSlot and nibcase to use too:
   the emulator reads its memory for it through a `Memory` trait, is told what happened in
   typed `Event`s, and passes `Settings` (hardcore, encore, unofficial); the C shim hands Rust
