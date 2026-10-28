@@ -92,6 +92,7 @@ pub fn notice(m: &Message) -> (ui::toast::Said<'_>, Duration) {
             title: &m.text,
             detail: &m.detail,
             points: m.points,
+            badge: None,
         },
         shows,
     )

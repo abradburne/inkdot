@@ -1003,6 +1003,7 @@ impl App {
                     title: "A sample notice",
                     detail: "INKDOT_DEBUG=toast put it here",
                     points: 10,
+                    badge: None,
                 };
                 self.ui.notice(&said, Duration::from_secs(20));
             }

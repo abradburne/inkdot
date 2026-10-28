@@ -18,7 +18,8 @@ use nibkit::menu::{
 };
 use nibkit::settings::Value as Setting;
 
-pub mod toast;
+// The toast over the game is nibkit's, the same as DSperate's.
+pub use nibkit::menu::toast;
 
 // The Connections page (Wi-Fi, Bluetooth, the paired devices) is nibkit's, on nibOS; elsewhere
 // there are no radios for it, and no page.
@@ -213,7 +214,7 @@ pub struct Ui {
     dirty: bool,
     /// The top screen's overlay needs drawing again.
     top_dirty: bool,
-    /// A notice over the game in play (toast.rs), and when it goes.
+    /// A notice over the game in play (nibkit's toast), and when it goes.
     notice: Option<(Canvas, std::time::Instant)>,
     /// The Connections page's state while the menu is open (its worker stops when dropped),
     /// and what it last showed, to draw it again when that changes.
@@ -285,7 +286,7 @@ impl Ui {
     /// Puts a notice over the game for `shows` (DSperate's four seconds for an unlock): drawn
     /// now, shown while the menu is closed, gone when the time is up. A new one replaces it.
     pub fn notice(&mut self, said: &toast::Said, shows: std::time::Duration) {
-        let picture = toast::draw(&self.fonts, said, self.top.scale);
+        let picture = toast::draw(&self.fonts, said, self.top.scale, toast::MOST);
         self.notice = Some((picture, std::time::Instant::now() + shows));
         self.top_dirty = true;
     }

@@ -36,5 +36,6 @@ The first version.
   service's Game Boy address space (the bus, then the Color's work-RAM and cartridge-RAM
   banks). Softcore only: save states and fast-forward stay usable; a state load or a restart
   starts the set's progress over. Unlocks and the session's state go to the log (`cheevos:`
-  lines) and show over the game on the top screen for four seconds, in DSlot's style, as
-  DSperate shows its own.
+  lines) and show over the game on the top screen for four seconds, in DSlot's style: nibkit's
+  `menu::toast`, the one DSperate shows. The package needs a nibkit tag newer than v0.1.0,
+  which has no `menu::toast`.
