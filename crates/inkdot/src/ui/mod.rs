@@ -335,7 +335,7 @@ impl Ui {
     }
 
     /// Achievement `id` can be earned right now ([`toast::Notice::challenge`], with its badge or
-    /// awaiting it): its panel stays up until [`Ui::challenge_over`].
+    /// awaiting it): its icon stays up until [`Ui::challenge_over`].
     pub fn challenge(&mut self, id: u32, notice: toast::Notice) {
         self.indicators.challenge(id, notice);
     }
