@@ -49,9 +49,12 @@ The first version.
   cache DSlot fills (`~/.cache/retroachievements/badges`), fetched when missing. Built on
   nibkit 0.1.4
   (`menu::toast` and its queue, `menu::indicators`).
-- **inkdot-cheevos** knows neither the Game Boy nor English, for DSlot and nibcase to use too:
-  the emulator reads its memory for it through a `Memory` trait, is told what happened in
-  typed `Event`s, and passes `Settings` (hardcore, encore, unofficial); the C shim hands Rust
-  structs of its own, checked against the C side by a test. Network failures reach rcheevos as
-  the retryable error it expects, with the reason; the User-Agent carries rcheevos' own
-  clause.
+- **nib-cheevos**: the RetroAchievements crate inkdot grew (`inkdot-cheevos`) is nibkit's now
+  (0.2.0), shared with DSlot and every nibOS emulator: the session (`Memory`, typed `Event`s,
+  `Settings`), the token file and `RA_*` variables (`launch`), the ROM's hash by rhash for every
+  console (`hash`), the User-Agent (`ua`, `inkdot/0.1.0 (nibOS; linux aarch64) rcheevos/12.4`),
+  the badge cache. inkdot keeps its Game Boy memory map (`memory.rs`) and its words. Network
+  failures reach rcheevos as the retryable error it expects, with the reason, but a request
+  `curl` could never make, which isn't retried. The description DSlot reads says inkdot earns
+  achievements for GB and GBC (`[achievements]`, nibkit 0.2.0), so DSlot passes the sign-in to
+  those games only.

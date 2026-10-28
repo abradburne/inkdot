@@ -459,21 +459,13 @@ version = "0.1.0"
 dependencies = [
  "fontdue",
  "glow",
- "inkdot-cheevos",
  "inkdot-core",
  "libc",
  "miniz_oxide 0.8.9",
+ "nib-cheevos",
  "nibkit",
  "png",
  "sdl2",
-]
-
-[[package]]
-name = "inkdot-cheevos"
-version = "0.1.0"
-dependencies = [
- "cc",
- "libc",
 ]
 
 [[package]]
@@ -566,9 +558,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "nib-cheevos"
+version = "0.2.0"
+source = "git+https://github.com/abradburne/nibkit?tag=v0.2.0#df5c286c148c4025e78547c1d26d189d335178ba"
+dependencies = [
+ "cc",
+ "libc",
+]
+
+[[package]]
 name = "nibkit"
-version = "0.1.4"
-source = "git+https://github.com/abradburne/nibkit?tag=v0.1.4#6a9d1d4b1fbe6ed77e13b584f970184c5d7fff1d"
+version = "0.2.0"
+source = "git+https://github.com/abradburne/nibkit?tag=v0.2.0#df5c286c148c4025e78547c1d26d189d335178ba"
 dependencies = [
  "fontdue",
  "libc",

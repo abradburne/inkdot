@@ -1,5 +1,5 @@
 //! RetroAchievements in play: the sign-in DSlot passes in the environment, the game's set
-//! loaded and evaluated once a frame (`inkdot-cheevos`), what happens said on stderr, where
+//! loaded and evaluated once a frame (nibkit's `nib-cheevos`), what happens said on stderr, where
 //! DSlot's bug report picks it up, and worded for the notices over the game. Casual (softcore)
 //! only; nothing here changes how the game runs.
 //!
@@ -9,10 +9,11 @@
 //! never reaches inkdot, and the token is never written or logged.
 
 use crate::ui::{self, Picture, Ui};
-use inkdot_cheevos::badges::{self, Badges};
-use inkdot_cheevos::{Achievement, Client, Event, Settings, Summary};
+use nib_cheevos::badges::{self, Badges};
+use nib_cheevos::launch::Launch;
+use nib_cheevos::{Achievement, Client, Event, Settings, Summary};
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 /// The session, and what it shows over the game: the badges, fetched into the cache DSlot
 /// shares.
@@ -118,28 +119,19 @@ fn decode(file: &Path) -> Option<Picture> {
 /// their way; the outcome arrives as events ([`said`]). `rom` is the file as it is (not
 /// padded), since the service's identity for a Game Boy game is the file's MD5.
 pub fn start(rom: &[u8], color: bool, verbose: bool) -> Option<Session> {
-    let token_file = PathBuf::from(std::env::var_os("RA_TOKEN_FILE").filter(|v| !v.is_empty())?);
-    let mut credentials = match inkdot_cheevos::read_token_file(&token_file) {
-        Ok(c) => c,
+    let launch = match Launch::from_env() {
+        Ok(Some(launch)) => launch,
+        Ok(None) => return None,
         Err(e) => {
             eprintln!("cheevos: {e}");
             return None;
         }
     };
-    if credentials.username.is_empty() {
-        credentials.username = std::env::var("RA_USERNAME").unwrap_or_default();
-    }
-    if credentials.username.is_empty() {
-        eprintln!(
-            "cheevos: {} has a token but no username, and RA_USERNAME is not set",
-            token_file.display()
-        );
-        return None;
-    }
-    if std::env::var("RA_HARDCORE").is_ok_and(|v| v == "1") {
+    if launch.hardcore {
         eprintln!("cheevos: hardcore was asked for (RA_HARDCORE=1); inkdot plays Casual, hardcore is not supported yet");
     }
-    let mut client = match Client::start(&app(), Settings::default(), verbose) {
+    let user_agent = nib_cheevos::ua::user_agent("inkdot", env!("CARGO_PKG_VERSION"), None);
+    let mut client = match Client::start(&user_agent, Settings::default(), verbose) {
         Ok(c) => c,
         Err(e) => {
             eprintln!("cheevos: achievements unavailable: {e}");
@@ -148,14 +140,15 @@ pub fn start(rom: &[u8], color: bool, verbose: bool) -> Option<Session> {
     };
     eprintln!(
         "cheevos: using the token from {} (the launcher's sign-in)",
-        token_file.display()
+        launch.token_file.display()
     );
-    client.sign_in_with_token(&credentials);
-    match inkdot_cheevos::hash(rom, color) {
-        Some(hash) => client.load_game(&hash),
-        None => eprintln!("cheevos: cannot identify this ROM: rcheevos could not hash it"),
+    client.sign_in_with_token(&launch.credentials);
+    let system = if color { "GBC" } else { "GB" };
+    match nib_cheevos::hash::buffer(system, "", rom) {
+        Ok(hash) => client.load_game(&hash),
+        Err(e) => eprintln!("cheevos: cannot identify this ROM: {e}"),
     }
-    let badges = badges::dir().and_then(Badges::start);
+    let badges = badges::dir().and_then(|dir| Badges::start(dir, &user_agent));
     if badges.is_none() {
         eprintln!("cheevos: no badges: no cache folder or no curl");
     }
@@ -164,24 +157,6 @@ pub fn start(rom: &[u8], color: bool, verbose: bool) -> Option<Session> {
         badges,
         pictures: HashMap::new(),
     })
-}
-
-/// inkdot and the system it runs on, for the service's User-Agent: `inkdot/0.1.0 (nibOS;
-/// Linux aarch64)`.
-fn app() -> String {
-    let system = if cfg!(feature = "stock") {
-        "stock OS"
-    } else if cfg!(feature = "desktop") {
-        "desktop"
-    } else {
-        "nibOS"
-    };
-    format!(
-        "inkdot/{} ({system}; {} {})",
-        env!("CARGO_PKG_VERSION"),
-        std::env::consts::OS,
-        std::env::consts::ARCH
-    )
 }
 
 /// How a notice looks: its heading's colour.

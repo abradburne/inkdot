@@ -15,7 +15,7 @@
 
 pkgname=inkdot
 pkgver=0.1.0
-pkgrel=10
+pkgrel=11
 pkgdesc="Game Boy and Game Boy Color emulator for the Anbernic RG DS+, started from DSlot"
 arch=(aarch64)
 url="https://github.com/abradburne/inkdot"
@@ -25,8 +25,8 @@ makedepends=(cargo gcc)   # gcc: rcheevos, the RetroAchievements client library
 optdepends=('dslot: the game shelf that starts it')
 
 _root=$(cd "$startdir/../.." && pwd)
-# nibkit comes from its repository at the tag Cargo.toml names, unless NIBKIT names a local
-# checkout to build against instead (patched in, as CONTRIBUTING.md describes).
+# nibkit and nib-cheevos come from nibkit's repository at the tag Cargo.toml names, unless NIBKIT
+# names a local checkout to build both against instead (patched in, as CONTRIBUTING.md describes).
 _nibkit=${NIBKIT:+$(cd "$NIBKIT" && pwd)}
 
 pkgver() {
@@ -47,14 +47,22 @@ prepare() {
     local locked=--locked
     if [ -n "$_nibkit" ]; then
         mkdir -p "$srcdir/nibkit"
-        cp -r "$_nibkit"/{Cargo.toml,build.rs,src,assets,examples,README.md,CHANGELOG.md,LICENSE} "$srcdir/nibkit/"
-        printf '\n[patch."https://github.com/abradburne/nibkit"]\nnibkit = { path = "%s" }\n' \
-            "$srcdir/nibkit" >> "$srcdir/inkdot/.cargo/config.toml"
+        cp -r "$_nibkit"/{Cargo.toml,build.rs,src,assets,examples,README.md,CHANGELOG.md,nib-cheevos,nibkit-menu-c} "$srcdir/nibkit/"
+        cp "$_nibkit"/LICENSE* "$srcdir/nibkit/"
+        rm -rf "$srcdir/nibkit/nib-cheevos/target" "$srcdir/nibkit/nibkit-menu-c/target"
+        printf '\n[patch."https://github.com/abradburne/nibkit"]\nnibkit = { path = "%s" }\nnib-cheevos = { path = "%s/nib-cheevos" }\n' \
+            "$srcdir/nibkit" "$srcdir/nibkit" >> "$srcdir/inkdot/.cargo/config.toml"
         # Cargo.lock pins the tag's nibkit; the local one replaces it in the copy here.
         locked=
     fi
     cd "$srcdir/inkdot"
     cargo fetch $locked --target "$(rustc -vV | sed -n 's/^host: //p')"
+    # Where rcheevos' licence is (nib-cheevos' source: Cargo's checkout of nibkit, or NIBKIT's
+    # copy), for package(), which runs offline.
+    cargo metadata $locked --format-version 1 --manifest-path crates/inkdot/Cargo.toml |
+        grep -o '"manifest_path":"[^"]*/nib-cheevos/Cargo.toml"' | head -1 |
+        sed 's/^"manifest_path":"//; s/Cargo.toml"$/rcheevos\/LICENSE/' > "$srcdir/rcheevos-licence"
+    [ -s "$srcdir/rcheevos-licence" ] || { echo "nib-cheevos' source not found" >&2; return 1; }
 }
 
 build() {
@@ -65,7 +73,7 @@ build() {
 check() {
     cd "$srcdir/inkdot"
     # The test ROM suites skip here (the ROMs aren't part of the sources); make check runs them.
-    cargo test --release --frozen -p inkdot-core -p inkdot -p inkdot-cheevos --features inkdot/dslot,inkdot/cheevos
+    cargo test --release --frozen -p inkdot-core -p inkdot --features inkdot/dslot,inkdot/cheevos
 }
 
 package() {
@@ -74,8 +82,9 @@ package() {
     install -Dm644 packaging/nibos/inkdot.toml "$pkgdir/usr/share/dslot/emulators/inkdot.toml"
     install -Dm644 -t "$pkgdir/usr/share/doc/inkdot" README.md CHANGELOG.md docs/*.md
     install -Dm644 -t "$pkgdir/usr/share/licenses/inkdot" LICENSE-MIT LICENSE-APACHE THIRD-PARTY.md
-    # rcheevos (MIT), built in for RetroAchievements: its notice goes with every copy.
-    install -Dm644 crates/inkdot-cheevos/rcheevos/LICENSE "$pkgdir/usr/share/licenses/inkdot/LICENSE.rcheevos"
+    # rcheevos (MIT), built in for RetroAchievements through nib-cheevos (vendored there): its
+    # notice goes with every copy.
+    install -Dm644 "$(cat "$srcdir/rcheevos-licence")" "$pkgdir/usr/share/licenses/inkdot/LICENSE.rcheevos"
     # The Roboto Condensed fonts built in (through nibkit) are under the SIL OFL 1.1.
     install -Dm644 LICENSE-OFL "$pkgdir/usr/share/licenses/inkdot/OFL.txt"
 }

@@ -12,3 +12,4 @@ rustflags = ["-L", "/opt/homebrew/lib"]
 # "nibkit"): the path is relative to this folder's parent, the repository.
 # [patch."https://github.com/abradburne/nibkit"]
 # nibkit = { path = "../nibkit" }
+# nib-cheevos = { path = "../nibkit/nib-cheevos" }

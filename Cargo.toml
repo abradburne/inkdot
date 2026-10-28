@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/inkdot-core", "crates/inkdot-test", "crates/inkdot", "crates/inkdot-cheevos"]
+members = ["crates/inkdot-core", "crates/inkdot-test", "crates/inkdot"]
 resolver = "2"
 
 [workspace.package]

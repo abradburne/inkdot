@@ -18,10 +18,11 @@ hears is also tried on the handheld, and the commit says how.
 ## nibkit
 
 The frontend uses [nibkit](https://github.com/abradburne/nibkit), nibOS's SDK library, as a git
-dependency at a tag. To work on both at once, build against a local checkout: copy
-`.cargo/config.example.toml` to `.cargo/config.toml` (gitignored, so your paths stay yours) and
-uncomment its `[patch]`, with the path to your nibkit relative to this repository. The example
-also has the settings for building on an Apple silicon Mac.
+dependency at a tag, and its `nib-cheevos` crate (RetroAchievements) from the same repository.
+To work on both at once, build against a local checkout: copy `.cargo/config.example.toml` to
+`.cargo/config.toml` (gitignored, so your paths stay yours) and uncomment its `[patch]`, with the
+path to your nibkit relative to this repository (both crates). The example also has the settings
+for building on an Apple silicon Mac.
 
 Cargo then records the local nibkit in `Cargo.lock`; don't commit that change. The PKGBUILD does
 the same with `NIBKIT=path/to/nibkit makepkg ...`, and gives the build its own Cargo config.

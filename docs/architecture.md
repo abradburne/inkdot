@@ -62,12 +62,12 @@ screen in its left half and the bottom in its right. Where the stock OS lacks wh
 (the panel's vblank, backlight power, apps setting brightness), inkdot falls back: the swap's
 own sync, a bottom screen left lit, the stock keys.
 
-RetroAchievements (`crates/inkdot-cheevos`, feature `cheevos`): rcheevos, the service's own
-client library, vendored verbatim and built by `cc` with a C shim (`csrc/shim.c`) whose structs
-and numbers are its own (an event is one `ink_rc_event`; a test checks the Rust declarations'
-sizes against the C ones), so no rcheevos struct is mirrored in Rust and a new event adds a
-field rather than changing a callback. The crate knows neither the Game Boy nor English, so
-DSlot and nibcase can share it: the emulator reads its memory for it through the `Memory` trait,
+RetroAchievements (feature `cheevos`): nibkit's `nib-cheevos` crate, which every nibOS emulator
+and DSlot share: rcheevos, the service's own client library, vendored verbatim there and built by
+`cc` with a C shim whose structs and numbers are its own (an event is one `nib_rc_event`; a test
+checks the Rust declarations' sizes against the C ones), so no rcheevos struct is mirrored in
+Rust and a new event adds a field rather than changing a callback. It knows neither the Game Boy
+nor English: the emulator reads its memory for it through the `Memory` trait,
 gets typed `Event`s back, and says how the game is played with `Settings`. rcheevos runs only
 on the emulation thread, in `Client::frame` after each emulated frame (`Client::idle` while
 paused), where it reads the machine through inkdot's `memory.rs` (`Bus`): the service's Game
@@ -76,7 +76,8 @@ and cartridge RAM banks 1-15 at `$16000`, as rcheevos' console table lays them o
 core's arrays. The service's requests go to a thread that runs `curl` (the form, with the
 token, on its standard input); the answers come back on a channel and are handed to rcheevos on
 the next frame, so the network never holds a frame, and a request that never reached the
-service is answered as rcheevos' retryable error. Badges are fetched the same way on a thread
+service is answered as rcheevos' retryable error (one `curl` could never make, as its
+non-retryable one). Badges are fetched the same way on a thread
 of their own, into the cache DSlot shares. `achievements.rs` words the events for the log and
 the notices, and draws the indicators through `ui/`. The sign-in is DSlot's, from
 `RA_TOKEN_FILE`; Casual only. The set's progress is rcheevos' bytes in a `RACH` section of

@@ -13,12 +13,13 @@ categories.workspace = true
 
 [dependencies]
 inkdot-core = { path = "../inkdot-core" }
-# RetroAchievements (feature `cheevos`): rcheevos, vendored, and curl as the transport.
-inkdot-cheevos = { path = "../inkdot-cheevos", optional = true }
 # nibOS's SDK library (github.com/abradburne/nibkit, MIT): the screens, vblank, buttons, touch,
 # brightness, paths, settings, the menu and DSlot's description format. To build against a local
 # checkout, patch it in from outside the repository (CONTRIBUTING.md, "nibkit").
-nibkit = { git = "https://github.com/abradburne/nibkit", tag = "v0.1.4", version = "0.1", default-features = false, features = ["menu-raster"] }
+nibkit = { git = "https://github.com/abradburne/nibkit", tag = "v0.2.0", version = "0.2", default-features = false, features = ["menu-raster"] }
+# RetroAchievements (feature `cheevos`), nibkit's: rcheevos, vendored there, and curl as the
+# transport; the session and the ROM's hash.
+nib-cheevos = { git = "https://github.com/abradburne/nibkit", tag = "v0.2.0", version = "0.2", default-features = false, features = ["client", "hash"], optional = true }
 # SDL2's API, linked against the system's SDL2 (sdl2-compat on SDL3), as DSlot does.
 sdl2 = "0.38"
 glow = "0.14"
@@ -42,7 +43,7 @@ desktop = ["nibkit/desktop"]
 dslot = ["nibkit/dslot"]
 # RetroAchievements: signed in through DSlot (RA_TOKEN_FILE in the environment), softcore only.
 # Needs a C compiler for rcheevos; the stock and desktop builds leave it out.
-cheevos = ["dep:inkdot-cheevos"]
+cheevos = ["dep:nib-cheevos"]
 
 [lints.rust]
 unsafe_code = "allow"

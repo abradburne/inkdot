@@ -15,8 +15,8 @@
 //! RAM is the first bank. An address outside every region reads as zero and reports itself
 //! unbacked, so rcheevos marks an achievement that needs it unsupported rather than wrong.
 
-use inkdot_cheevos::Memory;
 use inkdot_core::{GameBoy, Model};
+use nib_cheevos::Memory;
 
 /// One address past the last the service defines for a Game Boy Color.
 #[cfg(test)]

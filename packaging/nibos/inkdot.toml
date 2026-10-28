@@ -8,6 +8,11 @@ priority = 100
 GB = ["/usr/bin/inkdot", "{options}", "--saves", "{saves}", "{rom}"]
 GBC = ["/usr/bin/inkdot", "{options}", "--saves", "{saves}", "{rom}"]
 
+# RetroAchievements: DSlot passes the player's sign-in to GB and GBC games; Casual only.
+[achievements]
+systems = ["GB", "GBC"]
+hardcore = false
+
 [[options]]
 key = "look"
 label = "Look"
