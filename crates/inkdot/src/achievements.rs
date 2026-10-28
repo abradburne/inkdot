@@ -7,8 +7,10 @@
 //! hardcore). Without `RA_TOKEN_FILE` there is no session and nothing is logged. The password
 //! never reaches inkdot, and the token is never written or logged.
 
+use crate::ui;
 use inkdot_cheevos::{Client, Kind, Message};
 use std::path::PathBuf;
+use std::time::Duration;
 
 /// The session, when the launcher passed a sign-in: signed in and the game loading, both on
 /// their way; the outcome arrives through [`show`]. `rom` is the file as it is (not padded),
@@ -56,15 +58,43 @@ pub fn start(rom: &[u8], color: bool, verbose: bool) -> Option<Client> {
 
 /// Says what happened since the last frame, on stderr: `cheevos: <what> -- <detail>`, an unlock
 /// with its points. The same shape as DSperate's lines, so DSlot's bug report reads the same
-/// for both.
-pub fn show(client: &mut Client) {
-    for m in client.take_messages() {
-        eprintln!("cheevos: {}", line(&m));
-        // TODO(toast): an unlock should show on the top screen while the game plays. nibkit's
-        // shared overlay (the pause menu's crate) has no toast yet; when it gets one, draw
-        // `line(&m)` with it here, as DSperate shows its own. The bottom screen's toast
-        // (`App::toast`) is dark in play, so it is no place for it.
+/// for both. Returns the messages, for the notices over the game ([`notice`]).
+pub fn show(client: &mut Client) -> Vec<Message> {
+    let messages = client.take_messages();
+    for m in &messages {
+        eprintln!("cheevos: {}", line(m));
     }
+    messages
+}
+
+/// A message as a notice over the game, as DSperate shows its own: an unlock headed
+/// "Achievement unlocked" in gold for four seconds, a problem headed "RetroAchievements" in red,
+/// anything else plain and briefer.
+pub fn notice(m: &Message) -> (ui::toast::Said<'_>, Duration) {
+    use ui::toast::Kind as Shown;
+    let (kind, header, shows) = match m.kind {
+        Kind::Unlock => (
+            Shown::Unlock,
+            "Achievement unlocked",
+            Duration::from_secs(4),
+        ),
+        Kind::Problem => (
+            Shown::Problem,
+            "RetroAchievements",
+            Duration::from_millis(2500),
+        ),
+        Kind::Info => (Shown::Info, "", Duration::from_millis(2500)),
+    };
+    (
+        ui::toast::Said {
+            kind,
+            header,
+            title: &m.text,
+            detail: &m.detail,
+            points: m.points,
+        },
+        shows,
+    )
 }
 
 /// One line for a message: "Achievement unlocked: Title (5 points) -- description", or

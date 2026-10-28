@@ -18,6 +18,8 @@ use nibkit::menu::{
 };
 use nibkit::settings::Value as Setting;
 
+pub mod toast;
+
 // The Connections page (Wi-Fi, Bluetooth, the paired devices) is nibkit's, on nibOS; elsewhere
 // there are no radios for it, and no page.
 #[cfg(feature = "nibos")]
@@ -211,6 +213,8 @@ pub struct Ui {
     dirty: bool,
     /// The top screen's overlay needs drawing again.
     top_dirty: bool,
+    /// A notice over the game in play (toast.rs), and when it goes.
+    notice: Option<(Canvas, std::time::Instant)>,
     /// The Connections page's state while the menu is open (its worker stops when dropped),
     /// and what it last showed, to draw it again when that changes.
     conn: Option<Connections>,
@@ -266,6 +270,7 @@ impl Ui {
             top: Canvas::new(1.0),
             dirty: true,
             top_dirty: true,
+            notice: None,
             conn: None,
             conn_seen: None,
         }
@@ -274,6 +279,14 @@ impl Ui {
     /// Something shown changed: draw again.
     pub fn touch_up(&mut self) {
         self.dirty = true;
+        self.top_dirty = true;
+    }
+
+    /// Puts a notice over the game for `shows` (DSperate's four seconds for an unlock): drawn
+    /// now, shown while the menu is closed, gone when the time is up. A new one replaces it.
+    pub fn notice(&mut self, said: &toast::Said, shows: std::time::Duration) {
+        let picture = toast::draw(&self.fonts, said, self.top.scale);
+        self.notice = Some((picture, std::time::Instant::now() + shows));
         self.top_dirty = true;
     }
 
@@ -578,6 +591,14 @@ impl Ui {
     /// picture and details; `Some(None)` to show the game as it is (in play, and on the look's
     /// rows, so a change shows); `None` when nothing changed.
     pub fn render_top(&mut self, m: &Model) -> Option<Option<&[u8]>> {
+        if self
+            .notice
+            .as_ref()
+            .is_some_and(|(_, until)| std::time::Instant::now() >= *until)
+        {
+            self.notice = None;
+            self.top_dirty = true;
+        }
         if !std::mem::take(&mut self.top_dirty) {
             return None;
         }
@@ -586,7 +607,12 @@ impl Ui {
 
     fn overlay(&mut self, m: &Model) -> Option<&[u8]> {
         if !self.menu {
-            return None;
+            // In play: the notice, when one is up.
+            let (notice, _) = self.notice.as_ref()?;
+            let c = &mut self.top;
+            c.px.fill(0);
+            toast::lay(c, notice, 16.0);
+            return Some(&c.px);
         }
         // On the look's rows the game shows as it is, so a change shows.
         let look_row = match (self.page, self.focused(m)) {

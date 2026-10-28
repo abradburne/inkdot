@@ -65,7 +65,7 @@ const AUDIO_TARGET: u32 = AUDIO_BUFFER + 700;
 const IDLE: Duration = Duration::from_secs(10);
 
 /// INKDOT_DEBUG: `stats` logs pacing and sound every five seconds; `cheevos` logs every
-/// RetroAchievements request; `shot=DIR` saves both
+/// RetroAchievements request; `toast` shows a sample notice over the game; `shot=DIR` saves both
 /// screens as PNG files there ten seconds in; `latency` logs, for each change of the buttons,
 /// when the frame that read it started and the vblank at which it was shown (CLOCK_MONOTONIC
 /// ns, comparable with nibOS's latency tools); `frames=FILE` writes a line per frame on leaving:
@@ -89,6 +89,8 @@ struct Debug {
     clamp: Option<u32>,
     /// `cheevos`: every request to RetroAchievements and rcheevos' own log.
     cheevos: bool,
+    /// `toast`: a sample achievement notice over the game after a few seconds, for a capture.
+    toast: bool,
 }
 
 impl Debug {
@@ -104,6 +106,7 @@ impl Debug {
                 _ if part == "latency" => d.latency = true,
                 _ if part == "cycle-looks" => d.cycle_looks = true,
                 _ if part == "cheevos" => d.cheevos = true,
+                _ if part == "toast" => d.toast = true,
                 Some(("menu", page)) => d.menu = Some(page.to_owned()),
                 _ => {}
             }
@@ -973,7 +976,10 @@ impl App {
             if paused {
                 c.idle(&self.gb);
             }
-            achievements::show(c);
+            for m in achievements::show(c) {
+                let (said, shows) = achievements::notice(&m);
+                self.ui.notice(&said, shows);
+            }
         }
         let t1 = Instant::now();
         let m1 = if logging {
@@ -989,6 +995,16 @@ impl App {
             if let Some(name) = self.debug.menu.clone() {
                 self.ui.open_menu();
                 self.ui.go_named(&name);
+            }
+            if self.debug.toast {
+                let said = ui::toast::Said {
+                    kind: ui::toast::Kind::Unlock,
+                    header: "Achievement unlocked",
+                    title: "A sample notice",
+                    detail: "INKDOT_DEBUG=toast put it here",
+                    points: 10,
+                };
+                self.ui.notice(&said, Duration::from_secs(20));
             }
         }
         if self.debug.cycle_looks {
