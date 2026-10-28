@@ -567,8 +567,8 @@ dependencies = [
 
 [[package]]
 name = "nibkit"
-version = "0.1.3"
-source = "git+https://github.com/abradburne/nibkit?tag=v0.1.3#8780d46c7ffbee657c7cab84d0d6cbc67e09794b"
+version = "0.1.4"
+source = "git+https://github.com/abradburne/nibkit?tag=v0.1.4#6a9d1d4b1fbe6ed77e13b584f970184c5d7fff1d"
 dependencies = [
  "fontdue",
  "libc",
