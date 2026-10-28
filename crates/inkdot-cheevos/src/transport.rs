@@ -70,7 +70,7 @@ pub fn start(curl: PathBuf, user_agent: String, incoming: Receiver<Job>, outgoin
 
 /// A thread that waits on the network must not hold the emulation thread's scheduling
 /// (a real-time class, or its utilization clamp, where the launcher gave it one).
-fn ordinary_priority() {
+pub(crate) fn ordinary_priority() {
     #[cfg(target_os = "linux")]
     {
         let param = libc::sched_param { sched_priority: 0 };

@@ -14,6 +14,7 @@
 //! rcheevos on a later frame, so a slow network never holds a frame. Nothing here reads the
 //! machine from the network thread.
 
+pub mod badges;
 mod ffi;
 mod transport;
 

@@ -71,8 +71,8 @@ const IDLE: Duration = Duration::from_secs(10);
 const CHEEVOS_SECTION: &[u8; 4] = b"RACH";
 
 /// INKDOT_DEBUG: `stats` logs pacing and sound every five seconds; `cheevos` logs every
-/// RetroAchievements request; `toast` shows a sample notice over the game; `shot=DIR` saves both
-/// screens as PNG files there ten seconds in; `latency` logs, for each change of the buttons,
+/// RetroAchievements request; `toast` shows a sample notice and achievement indicators over the
+/// game; `shot=DIR` saves both screens as PNG files there ten seconds in; `latency` logs, for each change of the buttons,
 /// when the frame that read it started and the vblank at which it was shown (CLOCK_MONOTONIC
 /// ns, comparable with nibOS's latency tools); `frames=FILE` writes a line per frame on leaving:
 /// the vblank it followed, when it started, finished the game, finished drawing and swapping,
@@ -95,7 +95,8 @@ struct Debug {
     clamp: Option<u32>,
     /// `cheevos`: every request to RetroAchievements and rcheevos' own log.
     cheevos: bool,
-    /// `toast`: a sample achievement notice over the game after a few seconds, for a capture.
+    /// `toast`: a sample achievement notice and indicators over the game after a few seconds,
+    /// for a capture.
     toast: bool,
 }
 
@@ -156,7 +157,7 @@ struct App {
     rom: Vec<u8>,
     /// RetroAchievements, when DSlot passed a sign-in (achievements.rs).
     #[cfg(feature = "cheevos")]
-    cheevos: Option<inkdot_cheevos::Client>,
+    cheevos: Option<achievements::Session>,
     options: Options,
     console: &'static str,
     title: String,
@@ -735,7 +736,7 @@ impl App {
         let mut machine = self.gb.save_state();
         // The achievement set's progress goes with the machine, as rcheevos asks.
         #[cfg(feature = "cheevos")]
-        if let Some(p) = self.cheevos.as_mut().and_then(|c| c.progress()) {
+        if let Some(p) = self.cheevos.as_mut().and_then(|s| s.client.progress()) {
             inkdot_core::state::add_section(&mut machine, CHEEVOS_SECTION, &p);
         }
         let png = encode_png(&self.rgba);
@@ -907,7 +908,7 @@ impl App {
     #[cfg_attr(not(feature = "cheevos"), allow(unused_variables))]
     fn cheevos_jumped(&mut self, state: Option<&[u8]>) {
         #[cfg(feature = "cheevos")]
-        if let Some(c) = &mut self.cheevos {
+        if let Some(c) = self.cheevos.as_mut().map(|s| &mut s.client) {
             match state {
                 Some(s) => c.restore_progress(inkdot_core::state::section(s, CHEEVOS_SECTION)),
                 None => c.reset(),
@@ -977,8 +978,8 @@ impl App {
                 // The set is checked against the machine after every frame it ran, fast
                 // or not, so a condition that holds for a frame is seen.
                 #[cfg(feature = "cheevos")]
-                if let Some(c) = &mut self.cheevos {
-                    c.frame(&memory::Bus(&self.gb));
+                if let Some(s) = &mut self.cheevos {
+                    s.client.frame(&memory::Bus(&self.gb));
                 }
             }
             let base = if self.options.str("speed") == "exact" {
@@ -1000,15 +1001,11 @@ impl App {
             }
         }
         #[cfg(feature = "cheevos")]
-        if let Some(c) = &mut self.cheevos {
+        if let Some(s) = &mut self.cheevos {
             if paused {
-                c.idle(&memory::Bus(&self.gb));
+                s.client.idle(&memory::Bus(&self.gb));
             }
-            for said in achievements::said(c) {
-                if let achievements::Said::Notice(n) = said {
-                    self.ui.notice(&n.said(), n.shows);
-                }
-            }
+            s.show(&mut self.ui);
         }
         let t1 = Instant::now();
         let m1 = if logging {
@@ -1035,6 +1032,19 @@ impl App {
                     badge: None,
                 };
                 self.ui.notice(&said, Duration::from_secs(20));
+                // And the indicators: a measured achievement's progress, and a challenge with
+                // a gold badge.
+                let progress = ui::toast::Said {
+                    kind: ui::toast::Kind::Info,
+                    header: "",
+                    title: "3/10",
+                    detail: "A sample progress",
+                    points: 0,
+                    badge: None,
+                };
+                self.ui.progress(Some(&progress));
+                let gold: Vec<u8> = [0xe8, 0xb8, 0x3c, 0xff].repeat(64 * 64);
+                self.ui.challenge(1, Some((gold, 64, 64)));
             }
         }
         if self.debug.cycle_looks {

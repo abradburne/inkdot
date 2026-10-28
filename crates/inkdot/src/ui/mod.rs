@@ -21,6 +21,61 @@ use nibkit::settings::Value as Setting;
 // The toast over the game is nibkit's, the same as DSperate's.
 pub use nibkit::menu::toast;
 
+/// A picture to lay over the game: RGBA with straight alpha, its width and height.
+pub type Picture = (Vec<u8>, usize, usize);
+
+/// A challenge's badge over the game, in units.
+const BADGE: f32 = 56.0;
+/// The widest the progress indicator is, in units.
+const PROGRESS_MOST: f32 = 340.0;
+
+/// Lays `pic` (straight alpha, from toast::draw) over `screen` (premultiplied) with its top left
+/// at `(x0, y0)` pixels; what falls outside is left out.
+fn lay_at(screen: &mut Canvas, pic: &Canvas, x0: usize, y0: usize) {
+    for y in 0..pic.h.min(screen.h.saturating_sub(y0)) {
+        for x in 0..pic.w.min(screen.w.saturating_sub(x0)) {
+            let s = (y * pic.w + x) * 4;
+            let d = ((y0 + y) * screen.w + x0 + x) * 4;
+            put(&mut screen.px[d..d + 4], &pic.px[s..s + 4]);
+        }
+    }
+}
+
+/// Lays a badge over `screen`, scaled to `side` pixels square (bilinear), its top left at
+/// `(x0, y0)`.
+fn lay_badge(screen: &mut Canvas, (rgba, w, h): &Picture, x0: usize, y0: usize, side: usize) {
+    let (w, h) = (*w, *h);
+    if w == 0 || h == 0 || side == 0 || rgba.len() < w * h * 4 {
+        return;
+    }
+    let at = |x: usize, y: usize, k: usize| rgba[(y.min(h - 1) * w + x.min(w - 1)) * 4 + k] as f32;
+    for y in 0..side.min(screen.h.saturating_sub(y0)) {
+        let fy = ((y as f32 + 0.5) * h as f32 / side as f32 - 0.5).max(0.0);
+        let (y1, ty) = (fy as usize, fy.fract());
+        for x in 0..side.min(screen.w.saturating_sub(x0)) {
+            let fx = ((x as f32 + 0.5) * w as f32 / side as f32 - 0.5).max(0.0);
+            let (x1, tx) = (fx as usize, fx.fract());
+            let mut px = [0u8; 4];
+            for (k, p) in px.iter_mut().enumerate() {
+                let top = at(x1, y1, k) * (1.0 - tx) + at(x1 + 1, y1, k) * tx;
+                let bottom = at(x1, y1 + 1, k) * (1.0 - tx) + at(x1 + 1, y1 + 1, k) * tx;
+                *p = (top * (1.0 - ty) + bottom * ty).round() as u8;
+            }
+            let d = ((y0 + y) * screen.w + x0 + x) * 4;
+            put(&mut screen.px[d..d + 4], &px);
+        }
+    }
+}
+
+/// One straight-alpha pixel onto a premultiplied one, replacing it.
+fn put(d: &mut [u8], s: &[u8]) {
+    let a = s[3] as u32;
+    for k in 0..3 {
+        d[k] = ((s[k] as u32 * a + 127) / 255) as u8;
+    }
+    d[3] = a as u8;
+}
+
 // The Connections page (Wi-Fi, Bluetooth, the paired devices) is nibkit's, on nibOS; elsewhere
 // there are no radios for it, and no page.
 #[cfg(feature = "nibos")]
@@ -216,6 +271,12 @@ pub struct Ui {
     top_dirty: bool,
     /// A notice over the game in play (nibkit's toast), and when it goes.
     notice: Option<(Canvas, std::time::Instant)>,
+    /// Achievements that can be earned right now (RetroAchievements' challenge indicators):
+    /// their ids and badges, shown at the top right while the challenge lasts.
+    challenges: Vec<(u32, Option<Picture>)>,
+    /// A measured achievement's progress (RetroAchievements' progress indicator), drawn, at
+    /// the top right.
+    progress: Option<Canvas>,
     /// The Connections page's state while the menu is open (its worker stops when dropped),
     /// and what it last showed, to draw it again when that changes.
     conn: Option<Connections>,
@@ -272,6 +333,8 @@ impl Ui {
             dirty: true,
             top_dirty: true,
             notice: None,
+            challenges: Vec::new(),
+            progress: None,
             conn: None,
             conn_seen: None,
         }
@@ -288,6 +351,35 @@ impl Ui {
     pub fn notice(&mut self, said: &toast::Said, shows: std::time::Duration) {
         let picture = toast::draw(&self.fonts, said, self.top.scale, toast::MOST);
         self.notice = Some((picture, std::time::Instant::now() + shows));
+        self.top_dirty = true;
+    }
+
+    /// An achievement can be earned right now: its badge (when there is one yet) stays up
+    /// until [`Ui::challenge_over`].
+    pub fn challenge(&mut self, id: u32, badge: Option<Picture>) {
+        match self.challenges.iter_mut().find(|(i, _)| *i == id) {
+            Some(c) => c.1 = badge.or(c.1.take()),
+            None => self.challenges.push((id, badge)),
+        }
+        self.top_dirty = true;
+    }
+
+    /// The challenge is over.
+    #[cfg_attr(not(feature = "cheevos"), allow(dead_code))]
+    pub fn challenge_over(&mut self, id: u32) {
+        self.challenges.retain(|(i, _)| *i != id);
+        self.top_dirty = true;
+    }
+
+    /// Whether achievement `id`'s challenge is up.
+    #[cfg_attr(not(feature = "cheevos"), allow(dead_code))]
+    pub fn has_challenge(&self, id: u32) -> bool {
+        self.challenges.iter().any(|(i, _)| *i == id)
+    }
+
+    /// A measured achievement's progress, up until `None`.
+    pub fn progress(&mut self, said: Option<&toast::Said>) {
+        self.progress = said.map(|s| toast::draw(&self.fonts, s, self.top.scale, PROGRESS_MOST));
         self.top_dirty = true;
     }
 
@@ -608,11 +700,31 @@ impl Ui {
 
     fn overlay(&mut self, m: &Model) -> Option<&[u8]> {
         if !self.menu {
-            // In play: the notice, when one is up.
-            let (notice, _) = self.notice.as_ref()?;
+            // In play: the notice, when one is up, at the bottom right; the achievement
+            // indicators at the top right.
+            if self.notice.is_none() && self.progress.is_none() && self.challenges.is_empty() {
+                return None;
+            }
             let c = &mut self.top;
             c.px.fill(0);
-            toast::lay(c, notice, 16.0);
+            if let Some((notice, _)) = &self.notice {
+                toast::lay(c, notice, toast::MARGIN);
+            }
+            let m = (toast::MARGIN * c.scale).round() as usize;
+            let mut y = m;
+            if let Some(p) = &self.progress {
+                lay_at(c, p, c.w.saturating_sub(p.w + m), y);
+                y += p.h + m / 2;
+            }
+            let side = (BADGE * c.scale).round() as usize;
+            let mut x = c.w.saturating_sub(m);
+            for (_, badge) in &self.challenges {
+                if let Some(b) = badge {
+                    x = x.saturating_sub(side);
+                    lay_badge(c, b, x, y, side);
+                    x = x.saturating_sub(m / 2);
+                }
+            }
             return Some(&c.px);
         }
         // On the look's rows the game shows as it is, so a change shows.

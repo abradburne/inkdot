@@ -8,14 +8,124 @@
 //! hardcore). Without `RA_TOKEN_FILE` there is no session and nothing is logged. The password
 //! never reaches inkdot, and the token is never written or logged.
 
+use crate::ui::{self, Picture, Ui};
+use inkdot_cheevos::badges::{self, Badges};
 use inkdot_cheevos::{Achievement, Client, Event, Settings, Summary};
-use std::path::PathBuf;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
+
+/// The session, and what it shows over the game: the badges, fetched into the cache DSlot
+/// shares, and the challenges waiting for theirs.
+pub struct Session {
+    pub client: Client,
+    badges: Option<Badges>,
+    /// Badges decoded, by name.
+    pictures: HashMap<String, Picture>,
+    /// Challenges up without their badge yet: the badge's name and the achievement's id.
+    waiting: Vec<(String, u32)>,
+}
+
+impl Session {
+    /// The events since the last frame, said: logged, and shown over the game.
+    pub fn show(&mut self, ui: &mut Ui) {
+        for (name, file) in self
+            .badges
+            .as_mut()
+            .map(Badges::fetched)
+            .unwrap_or_default()
+        {
+            let Some(pic) = decode(&file) else { continue };
+            self.pictures.insert(name.clone(), pic.clone());
+            for (_, id) in self.waiting.iter().filter(|(n, _)| *n == name) {
+                if ui.has_challenge(*id) {
+                    ui.challenge(*id, Some(pic.clone()));
+                }
+            }
+            self.waiting.retain(|(n, _)| *n != name);
+        }
+        for said in said(&mut self.client) {
+            match said {
+                Said::Nothing => {}
+                Said::Notice(n) => {
+                    let badge = n.badge.as_ref().and_then(|b| self.picture(b, ""));
+                    let mut s = n.said();
+                    if let Some((rgba, w, h)) = &badge {
+                        s.badge = Some((rgba, *w, *h));
+                    }
+                    ui.notice(&s, n.shows);
+                }
+                Said::Challenge(a) => {
+                    let badge = self.picture(&a.badge_name, &a.badge_url);
+                    if badge.is_none() {
+                        self.waiting.push((a.badge_name.clone(), a.id));
+                    }
+                    ui.challenge(a.id, badge);
+                }
+                Said::ChallengeOver(id) => ui.challenge_over(id),
+                Said::Progress(a) => {
+                    let badge = self.picture(&a.badge_name, &a.badge_url);
+                    let mut s = ui::toast::Said {
+                        kind: ui::toast::Kind::Info,
+                        header: "",
+                        title: &a.measured_progress,
+                        detail: &a.title,
+                        points: 0,
+                        badge: None,
+                    };
+                    if let Some((rgba, w, h)) = &badge {
+                        s.badge = Some((rgba, *w, *h));
+                    }
+                    ui.progress(Some(&s));
+                }
+                Said::ProgressOver => ui.progress(None),
+            }
+        }
+    }
+
+    /// The badge `name`, decoded, when it is in the cache; else it is fetched (from `url`, or
+    /// the service's usual place), for next time.
+    fn picture(&mut self, name: &str, url: &str) -> Option<Picture> {
+        if let Some(p) = self.pictures.get(name) {
+            return Some(p.clone());
+        }
+        let file = self.badges.as_mut()?.want(name, url)?;
+        let pic = decode(&file)?;
+        self.pictures.insert(name.to_owned(), pic.clone());
+        Some(pic)
+    }
+}
+
+/// A badge's PNG as RGBA.
+fn decode(file: &Path) -> Option<Picture> {
+    let data = std::fs::read(file).ok()?;
+    let mut decoder = png::Decoder::new(&data[..]);
+    decoder.set_transformations(png::Transformations::normalize_to_color8());
+    let mut reader = decoder.read_info().ok()?;
+    let mut buf = vec![0; reader.output_buffer_size()];
+    let info = reader.next_frame(&mut buf).ok()?;
+    let (w, h) = (info.width as usize, info.height as usize);
+    let px = &buf[..info.buffer_size()];
+    let rgba: Vec<u8> = match info.color_type {
+        png::ColorType::Rgba => px.to_vec(),
+        png::ColorType::Rgb => px
+            .chunks_exact(3)
+            .flat_map(|p| [p[0], p[1], p[2], 255])
+            .collect(),
+        png::ColorType::GrayscaleAlpha => px
+            .chunks_exact(2)
+            .flat_map(|p| [p[0], p[0], p[0], p[1]])
+            .collect(),
+        png::ColorType::Grayscale => px.iter().flat_map(|&g| [g, g, g, 255]).collect(),
+        png::ColorType::Indexed => return None,
+    };
+    (rgba.len() == w * h * 4).then_some((rgba, w, h))
+}
 
 /// The session, when the launcher passed a sign-in: signed in and the game loading, both on
 /// their way; the outcome arrives as events ([`said`]). `rom` is the file as it is (not
 /// padded), since the service's identity for a Game Boy game is the file's MD5.
-pub fn start(rom: &[u8], color: bool, verbose: bool) -> Option<Client> {
+pub fn start(rom: &[u8], color: bool, verbose: bool) -> Option<Session> {
     let token_file = PathBuf::from(std::env::var_os("RA_TOKEN_FILE").filter(|v| !v.is_empty())?);
     let mut credentials = match inkdot_cheevos::read_token_file(&token_file) {
         Ok(c) => c,
@@ -53,7 +163,16 @@ pub fn start(rom: &[u8], color: bool, verbose: bool) -> Option<Client> {
         Some(hash) => client.load_game(&hash),
         None => eprintln!("cheevos: cannot identify this ROM: rcheevos could not hash it"),
     }
-    Some(client)
+    let badges = badges::dir().and_then(Badges::start);
+    if badges.is_none() {
+        eprintln!("cheevos: no badges: no cache folder or no curl");
+    }
+    Some(Session {
+        client,
+        badges,
+        pictures: HashMap::new(),
+        waiting: Vec::new(),
+    })
 }
 
 /// inkdot and the system it runs on, for the service's User-Agent: `inkdot/0.1.0 (nibOS;
@@ -158,7 +277,7 @@ pub enum Said {
 /// What the events since the last frame change over the game; each is said on stderr too:
 /// `cheevos: <what> -- <detail>`, the same shape as DSperate's lines, so DSlot's bug report
 /// reads the same for both.
-pub fn said(client: &mut Client) -> Vec<Said> {
+fn said(client: &mut Client) -> Vec<Said> {
     client
         .take_events()
         .into_iter()
