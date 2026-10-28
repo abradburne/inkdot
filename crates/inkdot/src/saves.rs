@@ -137,6 +137,9 @@ pub fn default_dir(console: &str, stem: &str) -> PathBuf {
 /// "IKSL"  u8 version (1)  u64 made (Unix seconds)  u64 played (seconds)
 /// u32 picture length, PNG (160x144)   the rest: the machine (inkdot_core::state)
 /// ```
+///
+/// With RetroAchievements on, the machine carries the set's progress as a section of its own,
+/// `RACH` (rcheevos' bytes), which a build without them skips.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Slot {
     pub made: u64,

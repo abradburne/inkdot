@@ -66,6 +66,10 @@ const AUDIO_TARGET: u32 = AUDIO_BUFFER + 700;
 /// The bottom screen dims (or goes off) after this long untouched in play.
 const IDLE: Duration = Duration::from_secs(10);
 
+/// The save state section that carries RetroAchievements' progress (rcheevos' own bytes).
+#[cfg(feature = "cheevos")]
+const CHEEVOS_SECTION: &[u8; 4] = b"RACH";
+
 /// INKDOT_DEBUG: `stats` logs pacing and sound every five seconds; `cheevos` logs every
 /// RetroAchievements request; `toast` shows a sample notice over the game; `shot=DIR` saves both
 /// screens as PNG files there ten seconds in; `latency` logs, for each change of the buttons,
@@ -350,7 +354,11 @@ fn run(args: args::Args) -> Result<(), String> {
     if app.options.bool("resume") {
         if let Some(slot) = app.files.resume(model) {
             match app.gb.load_state(&slot.machine) {
-                Ok(()) => app.played_before = slot.played,
+                Ok(()) => {
+                    app.played_before = slot.played;
+                    // Restored once the set has loaded.
+                    app.cheevos_jumped(Some(&slot.machine));
+                }
                 Err(e) => eprintln!("inkdot: not resuming: {e}"),
             }
         }
@@ -665,15 +673,18 @@ impl App {
                 self.toast(&format!("Saved to slot {slot}"));
             }
             Action::Load(slot) => {
-                match Slot::read(&self.files.state(slot)).map(|s| self.gb.load_state(&s.machine)) {
-                    Some(Ok(())) => {
+                let Some(s) = Slot::read(&self.files.state(slot)) else {
+                    self.toast(&format!("Slot {slot} is empty"));
+                    return self.refresh_model();
+                };
+                match self.gb.load_state(&s.machine) {
+                    Ok(()) => {
                         self.quick_slot = slot;
                         self.toast(&format!("Slot {slot} loaded"));
                         self.ui.close_menu();
-                        self.cheevos_reset();
+                        self.cheevos_jumped(Some(&s.machine));
                     }
-                    Some(Err(e)) => self.toast(&format!("Can't load: {e}")),
-                    None => self.toast(&format!("Slot {slot} is empty")),
+                    Err(e) => self.toast(&format!("Can't load: {e}")),
                 }
             }
             Action::Set {
@@ -720,7 +731,13 @@ impl App {
     }
 
     fn save_slot(&mut self, slot: usize) {
-        let machine = self.gb.save_state();
+        #[allow(unused_mut)]
+        let mut machine = self.gb.save_state();
+        // The achievement set's progress goes with the machine, as rcheevos asks.
+        #[cfg(feature = "cheevos")]
+        if let Some(p) = self.cheevos.as_mut().and_then(|c| c.progress()) {
+            inkdot_core::state::add_section(&mut machine, CHEEVOS_SECTION, &p);
+        }
         let png = encode_png(&self.rgba);
         let s = Slot {
             made: saves::unix_now(),
@@ -869,24 +886,32 @@ impl App {
         }
         self.gb = gb;
         self.played_before = 0;
+        let mut resumed = None;
         if let Some(slot) = self.files.resume(model) {
             if self.gb.load_state(&slot.machine).is_ok() {
                 self.played_before = slot.played;
+                resumed = Some(slot.machine);
             }
         }
         self.started = Instant::now();
-        self.cheevos_reset();
+        self.cheevos_jumped(resumed.as_deref());
         self.apply_look();
         self.ui.close_menu();
         self.refresh_model();
     }
 
-    /// The machine's memory jumped (a state loaded, the game started over): the achievement
-    /// set's progress starts over with it, so the jump can't unlock anything.
-    fn cheevos_reset(&mut self) {
+    /// The machine's memory jumped: to a save state (`Some`, the state's bytes), and the
+    /// achievement set's progress becomes the state's, or starts over when it has none; or to
+    /// the game's start (`None`), and the progress starts over. Either way the jump can't
+    /// unlock anything.
+    #[cfg_attr(not(feature = "cheevos"), allow(unused_variables))]
+    fn cheevos_jumped(&mut self, state: Option<&[u8]>) {
         #[cfg(feature = "cheevos")]
         if let Some(c) = &mut self.cheevos {
-            c.reset();
+            match state {
+                Some(s) => c.restore_progress(inkdot_core::state::section(s, CHEEVOS_SECTION)),
+                None => c.reset(),
+            }
         }
     }
 

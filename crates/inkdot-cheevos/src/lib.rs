@@ -590,6 +590,30 @@ impl Client {
     /// own messages. Fails when `curl`, which carries the requests, is not there.
     pub fn start(app: &str, settings: Settings, verbose: bool) -> Result<Client, String> {
         let curl = curl_path().ok_or("no curl to reach the service with")?;
+        let (client, incoming, answers, user_agent) = Client::create(app, settings, verbose)?;
+        transport::start(curl, user_agent.clone(), incoming, answers);
+        client
+            .inner()
+            .log(&format!("session up, user agent {user_agent}"));
+        Ok(client)
+    }
+
+    /// The client without its network thread: the requests come out of the receiver, the
+    /// answers go in through the sender. And the User-Agent to send.
+    #[allow(clippy::type_complexity)]
+    fn create(
+        app: &str,
+        settings: Settings,
+        verbose: bool,
+    ) -> Result<
+        (
+            Client,
+            Receiver<transport::Job>,
+            Sender<transport::Done>,
+            String,
+        ),
+        String,
+    > {
         let (jobs, incoming) = channel();
         let (answers, done) = channel();
         let inner = NonNull::from(Box::leak(Box::new(Inner {
@@ -633,12 +657,7 @@ impl Client {
         unsafe { ffi::ink_rc_user_agent_clause(raw, clause.as_mut_ptr(), clause.len()) };
         // SAFETY: NUL-terminated within the buffer (rcheevos makes sure of it).
         let clause = unsafe { string(clause.as_ptr()) };
-        let user_agent = format!("{app} {clause}");
-        transport::start(curl, user_agent.clone(), incoming, answers);
-        client
-            .inner()
-            .log(&format!("session up, user agent {user_agent}"));
-        Ok(client)
+        Ok((client, incoming, answers, format!("{app} {clause}")))
     }
 
     fn inner(&self) -> &Inner {
@@ -748,8 +767,13 @@ impl Client {
     }
 
     /// The set's progress (hit counts, measured values) as bytes, to keep in a save state;
-    /// `None` when no set is loaded. rcheevos' format, opaque here.
+    /// `None` when no set is loaded. rcheevos' format, opaque here. While the set is still
+    /// loading, the progress waiting to be restored ([`Client::restore_progress`]), so a state
+    /// saved then keeps it.
     pub fn progress(&mut self) -> Option<Vec<u8>> {
+        if let Some(p) = self.inner().pending_progress.borrow().as_ref() {
+            return Some(p.clone());
+        }
         let raw = self.inner().raw.get();
         // SAFETY: the client is alive.
         let size = unsafe { ffi::ink_rc_progress_size(raw) };
@@ -904,9 +928,179 @@ mod tests {
         assert_eq!(c.game_id(), 0);
         assert_eq!(c.progress(), None, "no progress without a set");
         c.restore_progress(None);
+        // A state loaded while the set loads: its progress waits, and a state saved meanwhile
+        // keeps it; a reset drops it.
+        // (As if signed in and loading: no request reaches the service from a test.)
+        c.inner().state.set(State::LoadingGame);
+        c.restore_progress(Some(b"progress"));
+        assert_eq!(c.progress().as_deref(), Some(&b"progress"[..]));
+        c.reset();
+        assert_eq!(c.progress(), None);
         c.frame(&Zeros);
         c.idle(&Zeros);
         c.reset();
+    }
+
+    /// The service, played by the test: rcheevos' requests answered as the service answers
+    /// them (the fields rcheevos' rapi reads), and the console's memory 16 bytes.
+    struct Service {
+        client: Client,
+        requests: Receiver<transport::Job>,
+        answers: Sender<transport::Done>,
+        asked: Vec<String>,
+    }
+
+    struct Ram(RefCell<[u8; 16]>);
+    impl Memory for Ram {
+        fn read(&self, address: u32, buf: &mut [u8]) -> u32 {
+            let ram = self.0.borrow();
+            for (i, b) in buf.iter_mut().enumerate() {
+                *b = ram.get(address as usize + i).copied().unwrap_or(0);
+            }
+            buf.len() as u32
+        }
+    }
+
+    const SETS: &str = r#"{"Success":true,"GameId":1,"Title":"Test Game","ConsoleId":4,
+        "ImageIconUrl":"https://media.retroachievements.org/Images/000001.png",
+        "RichPresenceGameId":1,"RichPresencePatch":"","Sets":[{"AchievementSetId":1,
+        "GameId":1,"Title":"Test Game","Type":"core",
+        "ImageIconUrl":"https://media.retroachievements.org/Images/000001.png",
+        "Achievements":[
+        {"ID":1,"Title":"Three","Description":"byte 1 is 1 for three frames","Flags":3,
+         "Points":5,"MemAddr":"0xH0001=1.3.","Author":"t","BadgeName":"00001","Created":1,
+         "Modified":1,"Type":"","Rarity":1.0,"RarityHardcore":1.0,
+         "BadgeURL":"https://media.retroachievements.org/Badge/00001.png",
+         "BadgeLockedURL":"https://media.retroachievements.org/Badge/00001_lock.png"},
+        {"ID":2,"Title":"Ten","Description":"byte 2 reaches 10","Flags":3,"Points":10,
+         "MemAddr":"M:0xH0002=10","Author":"t","BadgeName":"00002","Created":1,"Modified":1,
+         "Type":"","Rarity":1.0,"RarityHardcore":1.0,
+         "BadgeURL":"https://media.retroachievements.org/Badge/00002.png",
+         "BadgeLockedURL":"https://media.retroachievements.org/Badge/00002_lock.png"},
+        {"ID":3,"Title":"Primed","Description":"byte 3 is 1, then byte 4 is 1","Flags":3,
+         "Points":1,"MemAddr":"0xH0003=1_T:0xH0004=1","Author":"t","BadgeName":"00003",
+         "Created":1,"Modified":1,"Type":"","Rarity":1.0,"RarityHardcore":1.0,
+         "BadgeURL":"https://media.retroachievements.org/Badge/00003.png",
+         "BadgeLockedURL":"https://media.retroachievements.org/Badge/00003_lock.png"}],
+        "Leaderboards":[]}]}"#;
+
+    impl Service {
+        fn new() -> Service {
+            let (client, requests, answers, _) =
+                Client::create("inkdot-test/0 (test)", Settings::default(), false).unwrap();
+            Service {
+                client,
+                requests,
+                answers,
+                asked: Vec::new(),
+            }
+        }
+
+        /// Answers what rcheevos asked, then runs a frame.
+        fn frame(&mut self, ram: &Ram) -> Vec<Event> {
+            while let Ok(job) = self.requests.try_recv() {
+                let form = job.post.map(|(_, f)| f).unwrap_or_default();
+                let api = form
+                    .split('&')
+                    .chain(job.url.split(['?', '&']))
+                    .find_map(|kv| kv.strip_prefix("r="))
+                    .unwrap_or("")
+                    .to_owned();
+                let body = match api.as_str() {
+                    "login2" => {
+                        r#"{"Success":true,"User":"Tester","Token":"t0k3n","Score":0,"SoftcoreScore":0,"Messages":0}"#
+                    }
+                    "achievementsets" => SETS,
+                    "startsession" => {
+                        r#"{"Success":true,"Unlocks":[],"HardcoreUnlocks":[],"ServerNow":1700000000}"#
+                    }
+                    "awardachievement" => {
+                        r#"{"Success":true,"Score":0,"SoftcoreScore":5,"AchievementID":1,"AchievementsRemaining":2}"#
+                    }
+                    _ => r#"{"Success":true}"#,
+                };
+                self.asked.push(api);
+                self.answers
+                    .send(transport::Done {
+                        ticket: job.ticket,
+                        status: 200,
+                        body: body.as_bytes().to_vec(),
+                    })
+                    .unwrap();
+            }
+            self.client.frame(ram);
+            self.client.take_events()
+        }
+    }
+
+    /// Progress kept in a state carries the hit counts: restored, an achievement needs only
+    /// the hits it still lacked; the indicators come through as events.
+    #[test]
+    fn progress_survives_a_state() {
+        let mut s = Service::new();
+        let ram = Ram(RefCell::new([0; 16]));
+        s.client.sign_in_with_token(&Credentials {
+            username: "Tester".into(),
+            token: "t0k3n".into(),
+        });
+        s.client.load_game("900150983cd24fb0d6963f7d28e17f72");
+        let mut events = Vec::new();
+        for _ in 0..10 {
+            events.extend(s.frame(&ram));
+        }
+        assert_eq!(s.client.state(), State::Playing, "asked {:?}", s.asked);
+        let loaded = events.iter().find_map(|e| match e {
+            Event::GameLoaded {
+                title,
+                summary,
+                hardcore,
+            } => Some((title.clone(), summary.total, *hardcore)),
+            _ => None,
+        });
+        assert_eq!(loaded, Some(("Test Game".into(), 3, false)));
+
+        // Two of three hits, kept.
+        ram.0.borrow_mut()[1] = 1;
+        assert!(s.frame(&ram).is_empty());
+        assert!(s.frame(&ram).is_empty());
+        let kept = s.client.progress().expect("progress with a set loaded");
+        // Started over, one hit is not enough.
+        s.client.reset();
+        ram.0.borrow_mut()[1] = 0;
+        s.frame(&ram);
+        ram.0.borrow_mut()[1] = 1;
+        assert!(s.frame(&ram).is_empty());
+        // Restored, the one hit lacking unlocks it.
+        s.client.restore_progress(Some(&kept));
+        let unlocked = s.frame(&ram);
+        let Some(Event::Unlocked(a)) = unlocked.first() else {
+            panic!("no unlock: {unlocked:?}");
+        };
+        assert_eq!((a.id, a.points, a.badge_name.as_str()), (1, 5, "00001"));
+        assert!(a.badge_url.ends_with("00001.png"));
+
+        // A measured achievement's progress.
+        ram.0.borrow_mut()[2] = 4;
+        let e = s.frame(&ram);
+        assert!(
+            e.iter().any(|e| matches!(e, Event::Progress(a)
+                if a.id == 2 && a.measured_progress == "4/10")),
+            "{e:?}"
+        );
+        // A challenge: primed while byte 3 is 1.
+        ram.0.borrow_mut()[3] = 1;
+        let e = s.frame(&ram);
+        assert!(
+            e.iter()
+                .any(|e| matches!(e, Event::ChallengeShown(a) if a.id == 3)),
+            "{e:?}"
+        );
+        ram.0.borrow_mut()[3] = 0;
+        let e = s.frame(&ram);
+        assert!(e.contains(&Event::ChallengeHidden { id: 3 }), "{e:?}");
+        // A state without progress starts everything over.
+        s.client.restore_progress(None);
+        assert!(s.asked.iter().any(|a| a == "awardachievement"));
     }
 
     #[test]
