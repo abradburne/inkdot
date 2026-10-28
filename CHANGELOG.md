@@ -16,6 +16,9 @@ The first version.
   volume), dimmed or off while untouched; resume where the game was left; battery saves and the
   clock in DSlot's saves folder.
 - **nibOS**: a PKGBUILD, and a DSlot description whose options DSlot shows per console and game.
+- **SDL on the DS+**: SDL 3.4's KMSDRM driver is told to use its legacy page-flip path
+  (`SDL_KMSDRM_ATOMIC=0`): its atomic one has no plane for the second panel and crashed the
+  program at the bottom screen's first picture and at exit.
 - **Without DSlot**: `inkdot game.gbc` or `inkdot` alone (a list of the games on the cards), its
   own settings file and saves folders.
 - **Stock OS**: an Apps script and a zip for the games card (`--features stock`): one window

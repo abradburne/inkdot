@@ -212,6 +212,7 @@ fn main() {
 
 fn run(args: args::Args) -> Result<(), String> {
     watch_sigterm();
+    video::prepare_sdl();
     let sdl = sdl2::init()?;
     let video_sys = sdl.video()?;
     let mut video = Video::open(&video_sys)?;

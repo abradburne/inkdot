@@ -175,6 +175,19 @@ fn texture(gl: &glow::Context, w: i32, h: i32) -> Result<glow::Texture, String> 
     }
 }
 
+/// What SDL has to know before its video subsystem starts: call it before `sdl2::init()`.
+///
+/// SDL 3.4's KMSDRM driver has two page-flip paths. The atomic one, its default, sets up a DRM
+/// plane only for the display of the first window made, and dereferences the missing plane of
+/// every other window when that window's surfaces are swapped or torn down: the bottom
+/// screen's window crashed inkdot at its first present, and again at exit (SDL 3.4.18,
+/// `add_plane_property` on a null plane from `drm_atomic_set_plane_props`). The legacy path
+/// drives both displays, so this picks it, as DSlot does for its own two windows. An
+/// `SDL_KMSDRM_ATOMIC` in the environment wins over this setting, for trying a fixed SDL.
+pub fn prepare_sdl() {
+    sdl2::hint::set("SDL_KMSDRM_ATOMIC", "0");
+}
+
 impl Video {
     /// Opens the screens: a window on each panel on the handheld, one window on a computer.
     pub fn open(video: &sdl2::VideoSubsystem) -> Result<Video, String> {
