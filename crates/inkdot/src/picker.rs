@@ -56,6 +56,7 @@ impl Picker {
         let sep = "   \u{b7}   ";
         let menu = Menu {
             tabs: Vec::new(),
+            sections: Vec::new(),
             title: if games.is_empty() {
                 "NO GAMES IN ROMS/GB, ROMS/GBC, GAMES/GB OR GAMES/GBC".into()
             } else {

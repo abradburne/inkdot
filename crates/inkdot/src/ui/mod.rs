@@ -249,6 +249,12 @@ pub struct Ui {
     indicators_shown: u64,
     stack_at: Option<Rect>,
     notice_at: Option<Rect>,
+    /// The volume and brightness indicator (nibkit's, every app's) over the game at the bottom
+    /// right, the notice moved up above it: what nibOS announces of the volume keys, the
+    /// indicator's timing, and the level and fade step last drawn.
+    levels: Option<nibkit::levels::LevelWatch>,
+    level: nibkit::menu::level::Indicator,
+    level_drawn: Option<(nibkit::levels::Level, u8)>,
     /// The Connections page's state while the menu is open (its worker stops when dropped),
     /// and what it last showed, to draw it again when that changes.
     conn: Option<Connections>,
@@ -310,6 +316,9 @@ impl Ui {
             indicators_shown: 0,
             stack_at: None,
             notice_at: None,
+            levels: nibkit::levels::watch(),
+            level: nibkit::menu::level::Indicator::new(),
+            level_drawn: None,
             conn: None,
             conn_seen: None,
         }
@@ -534,6 +543,7 @@ impl Ui {
         let (rows, does): (Vec<Row>, Vec<Does>) = rows.into_iter().unzip();
         let mut menu = Menu {
             tabs: self.tabs(m),
+            sections: Vec::new(),
             title,
             row: row.min(rows.len().saturating_sub(1)),
             scroll,
@@ -667,6 +677,19 @@ impl Ui {
             self.notice_drawn = shown;
             self.top_dirty = true;
         }
+        if let Some(level) = self.levels.as_mut().and_then(|w| w.changed()) {
+            self.level.show(level, now);
+        }
+        let opacity = self.level.tick(now);
+        let level = self
+            .level
+            .level()
+            .filter(|_| opacity > 0.0 && !self.menu)
+            .map(|l| (l, (opacity * 32.0).round() as u8));
+        if level != self.level_drawn {
+            self.level_drawn = level;
+            self.top_dirty = true;
+        }
         let up = self.indicators.tick(now);
         // Over the menu's pictures they aren't shown: drawn again when it closes.
         let moved = up != self.indicators_shown && !self.menu;
@@ -686,16 +709,28 @@ impl Ui {
         })
     }
 
+    /// Where the level indicator sits on the top screen while it shows.
+    fn level_at(&mut self) -> Option<Rect> {
+        let (w, h) = (self.top.w, self.top.h);
+        let p = self.level.draw(&self.fonts, self.top.scale)?;
+        let (x, y) = p.place((w, h));
+        Some((x, y, p.width(), p.height()))
+    }
+
     /// The indicators laid again where they were, when they still cover the same rectangle
     /// and the notice isn't in it: that rectangle.
     fn relay_indicators(&mut self) -> Option<Rect> {
         let was = self.stack_at?;
+        let level_at = self.level_drawn.and_then(|_| self.level_at());
         let s = self
             .indicators
             .draw(&self.fonts, (self.top.w, self.top.h))?;
         let (x, y) = s.place();
         let at = (x, y, s.width(), s.height());
-        if at != was || self.notice_at.is_some_and(|n| overlap(n, at)) {
+        if at != was
+            || self.notice_at.is_some_and(|n| overlap(n, at))
+            || level_at.is_some_and(|l| overlap(l, at))
+        {
             return None;
         }
         let c = &mut self.top;
@@ -712,15 +747,32 @@ impl Ui {
         if !self.menu {
             // In play: the notice, when one is up, at the bottom right; the achievement
             // indicators at the bottom left.
-            if self.notice_drawn.is_none() && self.indicators_shown == 0 {
+            if self.notice_drawn.is_none()
+                && self.indicators_shown == 0
+                && self.level_drawn.is_none()
+            {
                 return None;
             }
+            let lift = match self.level_drawn {
+                Some(_) => self.level.lift(self.top.scale),
+                None => 0,
+            };
             let c = &mut self.top;
             c.px.fill(0);
             if let Some(t) = self.notices.draw(&self.fonts, c.scale) {
-                toast::lay(c, t);
                 let (x, y) = t.place((c.w, c.h));
+                let y = y.saturating_sub(lift);
+                lay_at(c, t.rgba(), (t.width(), t.height()), (x, y));
                 self.notice_at = Some((x, y, t.width(), t.height()));
+            }
+            if let Some((_, step)) = self.level_drawn {
+                let scale = c.scale;
+                if let Some(p) = self.level.draw(&self.fonts, scale) {
+                    let (size, at) = ((p.width(), p.height()), p.place((c.w, c.h)));
+                    if let Some(px) = self.level.faded(&self.fonts, scale, f32::from(step) / 32.0) {
+                        lay_at(c, px, size, at);
+                    }
+                }
             }
             if let Some(s) = self.indicators.draw(&self.fonts, (c.w, c.h)) {
                 s.lay(c);
@@ -1009,6 +1061,26 @@ impl Ui {
                 })
             }
             _ => None,
+        }
+    }
+}
+
+/// A picture (RGBA, straight alpha, `size` pixels) laid over the overlay `c` (premultiplied,
+/// clear where nothing is) with its top left at `at`, its pixels replacing the overlay's, as
+/// nibkit's `toast::lay` lays a toast.
+fn lay_at(c: &mut Canvas, rgba: &[u8], (w, h): (usize, usize), (x0, y0): (usize, usize)) {
+    for y in 0..h.min(c.h.saturating_sub(y0)) {
+        for x in 0..w.min(c.w.saturating_sub(x0)) {
+            let s = (y * w + x) * 4;
+            let d = ((y0 + y) * c.w + x0 + x) * 4;
+            let a = rgba[s + 3] as u32;
+            if a == 0 {
+                continue;
+            }
+            for k in 0..3 {
+                c.px[d + k] = ((rgba[s + k] as u32 * a + 127) / 255) as u8;
+            }
+            c.px[d + 3] = a as u8;
         }
     }
 }
