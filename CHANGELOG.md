@@ -4,6 +4,10 @@
 
 The first version.
 
+- **The volume and brightness indicator** (nibkit 0.4.0's `menu::level`): over the game, when
+  the volume keys or Menu + volume change a level, nibkit's indicator shows at the bottom right
+  of the top screen (a speaker or a sun, a bar, the percent) and fades 1.5 s after the last
+  press; a toast in that corner moves up above it.
 - **Core**: the SM83 CPU stepped per M-cycle; a per-dot PPU with a pixel FIFO, for the DMG and
   the CGB; the APU with band-limited 48 kHz output; the timer, interrupts, OAM DMA, the CGB's VRAM
   DMA and double speed; ROM-only, MBC1 (and MBC1M multicarts), MBC2, MBC3 with its clock, MBC5;
