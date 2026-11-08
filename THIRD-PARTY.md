@@ -63,8 +63,8 @@ licence).
 | memchr | 2.8.3 | Unlicense OR MIT | nibos, stock |
 | miniz_oxide | 0.8.9 | MIT OR Zlib OR Apache-2.0 | nibos, stock |
 | miniz_oxide | 0.9.1 | MIT OR Zlib OR Apache-2.0 | nibos, stock |
-| nib-cheevos | 0.2.0 | MIT | nibos |
-| nibkit | 0.2.0 | MIT AND OFL-1.1 | nibos, stock |
+| nib-cheevos | 0.4.1 | MIT | nibos |
+| nibkit | 0.4.1 | MIT AND OFL-1.1 | nibos, stock |
 | once_cell | 1.21.4 | MIT OR Apache-2.0 | nibos |
 | ordered-stream | 0.2.0 | MIT OR Apache-2.0 | nibos |
 | parking | 2.2.1 | Apache-2.0 OR MIT | nibos |
@@ -3022,7 +3022,7 @@ Permission is granted to anyone to use this software for any purpose, including 
 3. This notice may not be removed or altered from any source distribution.
 ```
 
-### nib-cheevos 0.2.0 (LICENSE-MIT); nibkit 0.2.0 (LICENSE-MIT)
+### nib-cheevos 0.4.1 (LICENSE-MIT); nibkit 0.4.1 (LICENSE-MIT)
 
 ```
 MIT License
