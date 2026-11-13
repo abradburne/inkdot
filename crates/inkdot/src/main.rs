@@ -7,6 +7,7 @@
 mod achievements;
 mod args;
 mod input;
+mod lcd;
 mod looks;
 #[cfg(feature = "cheevos")]
 mod memory;
@@ -918,22 +919,29 @@ impl App {
     }
 
     fn lcd_look(&self) -> LcdLook {
-        let lcd = self.options.bool("lcd");
+        let style = lcd::Style::parse(&self.options.str("screen")).unwrap_or(lcd::Style::Real);
+        let panel = match self.look {
+            Look::GameBoy => lcd::Panel::Dmg,
+            Look::Pocket | Look::Grey => lcd::Panel::Pocket,
+            Look::Light => lcd::Panel::Light,
+            Look::Color => lcd::Panel::Gbc,
+        };
+        let pattern = lcd::Pattern::new(style, panel);
         let shades = self.look.shades();
         // A DMG look's screen, on a DMG or in a CGB's palettes alike.
         let dmg = self.look != Look::Color;
+        let persistence = match (pattern.slow, dmg) {
+            (false, _) => 0.0,
+            (true, true) => self.look.persistence(),
+            (true, false) => 0.15,
+        };
         LcdLook {
-            persistence: if lcd {
-                if dmg {
-                    self.look.persistence()
-                } else {
-                    0.15
-                }
-            } else {
-                0.0
+            pattern,
+            shading: lcd::Shading {
+                persistence,
+                paper: shades[0],
+                shadow: pattern.shadow,
             },
-            grid: lcd,
-            gap: if dmg { shades[0] } else { [0xe8, 0xe8, 0xe8] },
             surround: if dmg {
                 [0x1b, 0x1d, 0x1a]
             } else {
@@ -1329,7 +1337,7 @@ fn option_rows(o: &Options, for_game: bool) -> Vec<OptionRow> {
                 at,
                 wraps: o.wraps(key),
                 use_hint: format!("use {from}"),
-                shows: matches!(key, "look" | "palette" | "colors" | "lcd"),
+                shows: matches!(key, "look" | "palette" | "colors" | "screen"),
             }
         })
         .collect()
@@ -1345,9 +1353,12 @@ fn pick(
     let mut picker = picker::Picker::new(picker::find(&nibkit::paths::rom_roots()));
     let blank = vec![0u8; 160 * 144 * 4];
     let look = LcdLook {
-        persistence: 0.0,
-        grid: false,
-        gap: [0; 3],
+        pattern: lcd::Pattern::OFF,
+        shading: lcd::Shading {
+            persistence: 0.0,
+            paper: [0; 3],
+            shadow: 0.0,
+        },
         surround: [0; 3],
     };
     let mut pointers = Vec::new();

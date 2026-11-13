@@ -4,6 +4,18 @@
 
 The first version.
 
+- **Screen textures** (the *Screen texture* option, which replaces the *LCD texture* toggle): Like
+  its screen (the default), Pixel grid, Colour stripes, Bold colour stripes, Scanlines, Soft
+  pixels, None. Our own design: each is a pattern over one Game Boy pixel, built once per size
+  into a mask that the shader multiplies in, every screen pixel the exact average of the pattern
+  it covers (so thin lines and stripes stay sharp at any size, whole or not), summed in linear
+  light. "Like its screen" follows the look: on the Game Boy, Pocket and Light the gaps between
+  pixels show the screen's backing and dark pixels cast a shadow down and to the right (relative
+  to each pixel's own, so flat areas keep their shade); on the Color, R, G and B stripes and a
+  dark grid. Dark textures brighten the picture by a gain worked out from the mask, the same on
+  all channels and no further than full, so mid-tones keep their brightness and colours their
+  hue. `examples/screen_looks.rs` renders them all to PNG files.
+
 - **The volume and brightness indicator** (nibkit 0.4.0's `menu::level`): over the game, when
   the volume keys or Menu + volume change a level, nibkit's indicator shows at the bottom right
   of the top screen (a speaker or a sun, a bar, the percent) and fades 1.5 s after the last

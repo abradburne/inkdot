@@ -1,7 +1,7 @@
 //! The command line: `inkdot [OPTIONS] [--saves DIR] [--boot-rom FILE] [--model dmg|cgb] [ROM]`.
 //!
 //! Without a ROM, inkdot shows the games it finds and lets the player pick one (as when it is
-//! started from the stock OS's Apps). The game options (`--look gameboy`, `--no-lcd`, ...) are
+//! started from the stock OS's Apps). The game options (`--look gameboy`, `--screen grid`, ...) are
 //! those in [`crate::options::SPECS`]; DSlot passes the same ones, from its description of inkdot.
 
 use crate::options::{Takes, SPECS};
@@ -27,7 +27,7 @@ pub struct Args {
     pub saves: Option<PathBuf>,
     pub boot_rom: Option<PathBuf>,
     pub model: ModelChoice,
-    /// Game options given, by key (`look`, `lcd`, ...).
+    /// Game options given, by key (`look`, `screen`, ...).
     pub options: BTreeMap<String, Value>,
 }
 
@@ -116,13 +116,14 @@ mod tests {
     #[test]
     fn a_full_command_line() {
         let a = parse(&words(
-            "--look pocket --no-lcd --fast 6 --saves /s/GB/Tetris /r/Tetris.gb",
+            "--look pocket --screen soft --no-resume --fast 6 --saves /s/GB/Tetris /r/Tetris.gb",
         ))
         .unwrap();
         assert_eq!(a.rom, Some(PathBuf::from("/r/Tetris.gb")));
         assert_eq!(a.saves, Some(PathBuf::from("/s/GB/Tetris")));
         assert_eq!(a.options["look"], Value::from("pocket"));
-        assert_eq!(a.options["lcd"], Value::Boolean(false));
+        assert_eq!(a.options["screen"], Value::from("soft"));
+        assert_eq!(a.options["resume"], Value::Boolean(false));
         assert_eq!(a.options["fast"], Value::Integer(6));
     }
 

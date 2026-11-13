@@ -42,6 +42,7 @@ ours. Its source is never opened. Record here which one, the version, and how it
 | DSlot `src/emulator.rs`, `src/launch.rs` (our own launcher, not an emulator) | The description format and launch.conf levels |
 | crates.io API, AUR RPC, Arch package search, GitHub search (2026-10-19) | Name collision checks |
 | Roboto Condensed (Google Fonts; built in through nibkit's `menu-raster`) | The menu's text. SIL OFL 1.1 (LICENSE-OFL) |
+| Our own design, from general knowledge of LCDs (STN and TFT screens, RGB stripes, a reflective screen's pixel shadow) | The screen textures (`crates/inkdot/src/lcd.rs`): their patterns, the area-averaged mask, the gain. No other program's code or numbers |
 | PKWARE APPNOTE.TXT (the zip format's specification) | Reading `.zip` games (`crates/inkdot/src/rom.rs`) |
 | nibkit ([github.com/abradburne/nibkit](https://github.com/abradburne/nibkit), our own, MIT) | Screens, vblank, input names, touch, brightness, volume, paths, settings, DSlot's description format |
 | rcheevos ([github.com/RetroAchievements/rcheevos](https://github.com/RetroAchievements/rcheevos), the service's client library, MIT; vendored in nibkit's `nib-cheevos/rcheevos`) | The RetroAchievements session, the ROM hash, the service's Game Boy address space (its console table, `src/rcheevos/consoleinfo.c`), and what an integration owes it (`include/rc_client.h`: progress in save states, the indicators, the User-Agent clause, the retryable transport error; the service's answers as `src/rapi` parses them, for a test): a client library, not an emulator |

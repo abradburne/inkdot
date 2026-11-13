@@ -43,6 +43,7 @@ main loop:  wait for the top panel's vblank (nibkit::vblank)
             sound: synthesizer rate = 48 kHz × 59.7275 × panel period, ± a slow
                    correction holding SDL's queue at 1200 frames            pacing.rs
             picture: frame → RGBA by palette or colour table, upload, shader video.rs
+                   with the screen texture's mask (built once per texture) lcd.rs
             the bottom screen, if anything on it changed                     ui/
             battery RAM a second after the game writes it (a thread)         saves.rs
 ```

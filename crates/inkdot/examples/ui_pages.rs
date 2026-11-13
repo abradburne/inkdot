@@ -65,7 +65,13 @@ fn main() {
                 "Use GB (Game Boy (green))",
                 true,
             ),
-            row("lcd", "LCD texture", None, "Use default (On)", true),
+            row(
+                "screen",
+                "Screen texture",
+                None,
+                "Use default (Like its screen)",
+                true,
+            ),
             row("speed", "Timing", None, "Use default (Smooth)", false),
             row(
                 "fast",

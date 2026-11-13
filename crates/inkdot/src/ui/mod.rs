@@ -472,7 +472,7 @@ impl Ui {
                 };
                 // The look's rows under LOOK, the rest under PLAY.
                 let group = |k: &str| match k {
-                    "look" | "palette" | "colors" | "lcd" => "LOOK",
+                    "look" | "palette" | "colors" | "screen" => "LOOK",
                     _ => "PLAY",
                 };
                 let mut rows = Vec::new();

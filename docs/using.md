@@ -8,7 +8,7 @@ inkdot plays games in `.gb`, `.gbc`, or a `.zip` with one in it. It can be start
   opens with a list of the games in `Roms/GB` and `Roms/GBC` on both cards, and in `Games/GB` and
   `Games/GBC`. A game in both `Games/` and `Roms/` is listed once.
 - **By hand**: `inkdot game.gbc`, or `inkdot` alone for the list. `inkdot --help` gives the
-  options, which are the same as on the menu's Game page (`--look pocket`, `--no-lcd`, `--fast 6`).
+  options, which are the same as on the menu's Game page (`--look pocket`, `--screen grid`, `--fast 6`).
 
 Leaving the game (Menu, or Quit on the bottom screen) saves where you are; the next start
 resumes there.
@@ -67,7 +67,7 @@ inkdot's (`~/.config/inkdot/`, or beside the program on the stock OS).
 | Look (GB games) | Game Boy Color (the CGB's own colouring), Game Boy, Game Boy Pocket, Game Boy Light, plain grey. The Color look runs the game on a CGB, the others on a DMG. A new look shows at once, even paused; a DMG look on a game running as a CGB uses that look's colours straight away, and Play offers to restart on a real DMG; the Color look on a game running as a DMG needs a restart, which Play offers (where you are is saved first, and each console keeps its own resume point). | Game Boy Color |
 | Colours (Color look) | By title (as a Game Boy Color picks them), or one of the twelve palettes a Game Boy Color offers for a button held at start-up | By title |
 | Colours (GBC games) | as on its screen (darker and softer, like the original), or as stored | As on its screen |
-| LCD texture | a faint grid between pixels and the original screens' slow pixels | On |
+| Screen texture | what lies over the pixels, with the original screens' slow pixels (all but None). **Like its screen**: the screen of the look's console: the Game Boy's and the Pocket's and Light's light gaps between pixels, with the dark pixels' shadow on the screen's backing (deepest on the Game Boy, faint on the backlit Light), or the Game Boy Color's colour stripes and dark grid. **Pixel grid**: the gaps alone (light on the Game Boy looks, dark on the Color). **Colour stripes**, **Bold colour stripes**: each pixel as red, green and blue stripes. **Scanlines**: a dark band under each row. **Soft pixels**: round, soft-edged dots. **None (sharp)**: square pixels, nothing over them. The dark textures brighten the picture to make up for what they take, so the game keeps its brightness (`--screen real\|grid\|stripes\|bold\|scanlines\|soft\|off`) | Like its screen |
 | Timing | Smooth: one game frame per refresh of the panel, 0.35% fast, never a repeated frame; Exact: the game's own speed, one frame shown twice every 4.8 s | Smooth |
 | Bottom screen in play | dim when idle, off when idle, always lit | Dim |
 | Resume where I left off | start each game where it was left | On |

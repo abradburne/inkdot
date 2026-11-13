@@ -3,16 +3,18 @@
 //! The top screen shows the game at 5×, 800×720, centred: the largest whole scale that fits
 //! the 1024×768 panel, so every Game Boy pixel is 5×5 panel pixels. Each frame is uploaded as a
 //! 160×144 texture (converted to RGBA on the CPU, where palettes and colour models are a table
-//! lookup) and drawn by one fragment shader, which also does the LCD texture: a faint grid
-//! between pixels and the slow response of the original screens, as a blend with the previous
-//! frame. The bottom screen is the emulator's own interface, drawn in software
-//! ([`crate::ui`]) and uploaded only when it changes.
+//! lookup) and drawn by one fragment shader, which also does the screen texture
+//! ([`crate::lcd`]): one multiply by a mask built once per texture and size, with the gain that
+//! keeps mid-tones bright, the reflective screens' pixel shadow, and the slow response of the
+//! original screens as a blend with the previous frame. The bottom screen is the emulator's own
+//! interface, drawn in software ([`crate::ui`]) and uploaded only when it changes.
 //!
 //! Each screen is a window of its own where nibOS has a display per panel; on the stock OS,
 //! whose Weston makes the two panels one display (the bottom on the right), one window covers
 //! both and each screen is half of it; on a computer, one window shows both, stacked, at half
 //! size.
 
+use crate::lcd::{self, Pattern, Shading};
 use glow::HasContext;
 use nibkit::screens::{self, Screen};
 use sdl2::video::{GLContext, GLProfile, SwapInterval, Window};
@@ -37,23 +39,48 @@ const GAME: &str = r#"
 out vec4 colour;
 uniform sampler2D now;
 uniform sampler2D before;
+uniform sampler2D mask;     // per screen pixel: what passes of each channel, how much backing shows
 uniform float persistence;  // the share of the last frame left in this one
-uniform float grid;         // 0: no grid; 1: the grid at full strength
-uniform vec3 gap;           // the colour between pixels
+uniform float gain;         // the brightening that gives back what the mask takes
+uniform vec3 paper;         // the screen's backing, linear
+uniform float shadow;       // how dark a black pixel's shadow is; 0: none
+uniform int shadow_step;    // how far it falls, down and right, in window pixels
+uniform ivec2 size;         // the picture's size in window pixels (the mask's)
 uniform vec2 origin;        // the picture's bottom-left corner, in window pixels
 uniform float scale;        // window pixels per panel pixel (1 on the handheld)
-void main() {
-    // Which panel pixel of the picture this is, counted from its own corner (GL's rows go up),
-    // then which Game Boy pixel (5x5 panel pixels each) and where in its square. Integers
+
+// Linear light, with a gamma of 2.
+vec3 lin(vec3 c) { return c * c; }
+
+float luma(vec3 c) { return dot(c, vec3(0.2126, 0.7152, 0.0722)); }
+
+// The game's colour at window pixel q of the picture, linear, with the last frame's ghost.
+vec3 at(ivec2 q) {
+    q = clamp(q, ivec2(0), size - 1);
+    // Which panel pixel this is, then which Game Boy pixel (5x5 panel pixels each). Integers
     // throughout: with interpolated texture coordinates at mediump (16-bit on the DS+'s GPU)
     // the right of the picture rounded to the wrong column, and the grid showed as stray lines.
-    ivec2 p = ivec2(floor((gl_FragCoord.xy - origin) / scale));
+    ivec2 p = ivec2(floor(vec2(q) / scale));
     ivec2 gb = ivec2(p.x / 5, 143 - p.y / 5);
-    vec3 c = mix(texelFetch(now, gb, 0).rgb, texelFetch(before, gb, 0).rgb, persistence);
-    // The last column and the bottom row of each square are the gap.
-    bool edge = p.x % 5 == 4 || p.y % 5 == 0;
-    c = mix(c, mix(c, gap, 0.35), edge ? grid : 0.0);
-    colour = vec4(c, 1.0);
+    return mix(lin(texelFetch(now, gb, 0).rgb), lin(texelFetch(before, gb, 0).rgb), persistence);
+}
+
+void main() {
+    // GL's rows go up; the mask's go down.
+    ivec2 q = ivec2(floor(gl_FragCoord.xy - origin));
+    vec3 c = at(q);
+    // Brightened alike in all channels, to where the brightest is full: the hue is kept.
+    float top = max(max(c.r, c.g), max(c.b, 1e-6));
+    vec4 m = texelFetch(mask, ivec2(q.x, size.y - 1 - q.y), 0);
+    vec3 o = c * min(gain, 1.0 / top) * m.rgb + paper * m.a;
+    if (shadow > 0.0) {
+        // The shadow of the pixel up and to the left, relative to this pixel's own.
+        float lp = max(luma(paper), 1e-4);
+        float caster = clamp(1.0 - luma(at(q + ivec2(-shadow_step, shadow_step))) / lp, 0.0, 1.0);
+        float own = clamp(1.0 - luma(c) / lp, 0.0, 1.0);
+        o *= (1.0 - shadow * caster) / (1.0 - shadow * own);
+    }
+    colour = vec4(sqrt(clamp(o, 0.0, 1.0)), 1.0);
 }
 "#;
 
@@ -69,9 +96,10 @@ void main() {
 /// How the game is drawn.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct LcdLook {
-    pub persistence: f32,
-    pub grid: bool,
-    pub gap: [u8; 3],
+    /// The screen texture.
+    pub pattern: Pattern,
+    /// The last frame's ghost, when the texture keeps it, and the screen's backing.
+    pub shading: Shading,
     /// Behind the game: the panel around it.
     pub surround: [u8; 3],
 }
@@ -105,6 +133,10 @@ pub struct Video {
     /// Over the game on the top screen while the menu is open (premultiplied RGBA), when shown.
     overlay: glow::Texture,
     overlay_on: bool,
+    /// The screen texture's mask, and what it was built for (pattern and size).
+    mask: glow::Texture,
+    mask_for: Option<(Pattern, i32, i32)>,
+    gain: f32,
     last_swap: std::time::Duration,
 }
 
@@ -320,6 +352,7 @@ impl Video {
         ];
         let ui = texture(&gl, screens::WIDTH as i32, screens::HEIGHT as i32)?;
         let overlay = texture(&gl, screens::WIDTH as i32, screens::HEIGHT as i32)?;
+        let mask = texture(&gl, 1, 1)?;
         Ok(Video {
             gl,
             _context: context,
@@ -336,6 +369,9 @@ impl Video {
             ui_ready: false,
             overlay,
             overlay_on: false,
+            mask,
+            mask_for: None,
+            gain: 1.0,
             last_swap: std::time::Duration::ZERO,
         })
     }
@@ -471,9 +507,17 @@ impl Video {
     pub fn present_top(&mut self, look: LcdLook, capture: bool) -> Option<Vec<u8>> {
         self.top.window.gl_make_current(&self._context).ok();
         self.viewport(self.top.viewport);
-        let gl = &self.gl;
         let rgb = |c: [u8; 3]| c.map(|v| v as f32 / 255.0);
         let surround = rgb(look.surround);
+        // The picture's size in window pixels, and a Game Boy pixel's.
+        let scale = self.top.viewport.2 as f32 / screens::WIDTH as f32;
+        let (w, h) = (
+            (GAME_W as f32 * scale).round() as i32,
+            (GAME_H as f32 * scale).round() as i32,
+        );
+        let cell = 5.0 * scale;
+        self.prepare_mask(look.pattern, w, h, cell);
+        let gl = &self.gl;
         // SAFETY: GL calls on the current context with this module's objects.
         unsafe {
             if self.shared_ui.is_some() {
@@ -503,15 +547,21 @@ impl Video {
             gl.bind_texture(glow::TEXTURE_2D, Some(self.frames[self.newest]));
             gl.active_texture(glow::TEXTURE1);
             gl.bind_texture(glow::TEXTURE_2D, Some(self.frames[(self.newest + 2) % 3]));
+            gl.active_texture(glow::TEXTURE2);
+            gl.bind_texture(glow::TEXTURE_2D, Some(self.mask));
             let u = |n: &str| gl.get_uniform_location(self.game, n);
             gl.uniform_1_i32(u("now").as_ref(), 0);
             gl.uniform_1_i32(u("before").as_ref(), 1);
-            gl.uniform_1_f32(u("persistence").as_ref(), look.persistence);
-            gl.uniform_1_f32(u("grid").as_ref(), if look.grid { 1.0 } else { 0.0 });
-            let g = rgb(look.gap);
-            gl.uniform_3_f32(u("gap").as_ref(), g[0], g[1], g[2]);
+            gl.uniform_1_i32(u("mask").as_ref(), 2);
+            let s = look.shading;
+            gl.uniform_1_f32(u("persistence").as_ref(), s.persistence);
+            gl.uniform_1_f32(u("gain").as_ref(), self.gain);
+            let p = rgb(s.paper).map(|v| v * v);
+            gl.uniform_3_f32(u("paper").as_ref(), p[0], p[1], p[2]);
+            gl.uniform_1_f32(u("shadow").as_ref(), s.shadow);
+            gl.uniform_1_i32(u("shadow_step").as_ref(), lcd::shadow_step(cell));
+            gl.uniform_2_i32(u("size").as_ref(), w, h);
             let v = self.top.viewport;
-            let scale = v.2 as f32 / screens::WIDTH as f32;
             let bottom = screens::HEIGHT as i32 - GAME_Y - GAME_H;
             gl.uniform_2_f32(
                 u("origin").as_ref(),
@@ -545,6 +595,33 @@ impl Video {
         self.top.window.gl_swap_window();
         self.last_swap = t.elapsed();
         shot
+    }
+
+    /// Builds the screen texture's mask for this pattern and picture size, when it isn't already
+    /// (once per change of texture or window size: about 2 ms for 800×720 on a computer).
+    fn prepare_mask(&mut self, pattern: Pattern, w: i32, h: i32, cell: f32) {
+        if self.mask_for == Some((pattern, w, h)) {
+            return;
+        }
+        let mask = pattern.build(w as usize, h as usize, cell);
+        self.gain = mask.gain;
+        self.mask_for = Some((pattern, w, h));
+        let gl = &self.gl;
+        // SAFETY: GL calls on the current context; `texels` is w*h*4 bytes.
+        unsafe {
+            gl.bind_texture(glow::TEXTURE_2D, Some(self.mask));
+            gl.tex_image_2d(
+                glow::TEXTURE_2D,
+                0,
+                glow::RGBA8 as i32,
+                w,
+                h,
+                0,
+                glow::RGBA,
+                glow::UNSIGNED_BYTE,
+                Some(&mask.texels),
+            );
+        }
     }
 
     /// How long the last swap of the top screen took (for INKDOT_DEBUG=stats).

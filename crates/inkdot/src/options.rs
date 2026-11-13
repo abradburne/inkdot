@@ -96,11 +96,11 @@ pub const SPECS: &[Spec] = &[
         default: Default::Str("screen"),
     },
     Spec {
-        key: "lcd",
-        label: "LCD texture",
+        key: "screen",
+        label: "Screen texture",
         consoles: &[],
-        takes: Takes::Toggle,
-        default: Default::Bool(true),
+        takes: Takes::Choice(crate::lcd::Style::CHOICES),
+        default: Default::Str("real"),
     },
     Spec {
         key: "speed",
@@ -428,11 +428,11 @@ mod tests {
 
     #[test]
     fn defaults_the_launch_and_the_menu_in_order() {
-        let mut o = options("order", &[("lcd", Value::Boolean(false))]);
+        let mut o = options("order", &[("resume", Value::Boolean(false))]);
         assert_eq!(o.get("look"), (Value::from("color"), Source::Default));
-        assert_eq!(o.get("lcd"), (Value::Boolean(false), Source::Launch));
-        o.set("lcd", Value::Boolean(true), true);
-        assert_eq!(o.get("lcd"), (Value::Boolean(true), Source::Game));
+        assert_eq!(o.get("resume"), (Value::Boolean(false), Source::Launch));
+        o.set("resume", Value::Boolean(true), true);
+        assert_eq!(o.get("resume"), (Value::Boolean(true), Source::Game));
         // A value the option doesn't take is ignored.
         o.set("look", "sepia".into(), true);
         assert_eq!(o.str("look"), "color");
@@ -491,7 +491,7 @@ mod tests {
     /// it takes that again.
     #[test]
     fn levels_set_inherit_and_unset() {
-        let mut o = options("levels-unset", &[("lcd", Value::Boolean(false))]);
+        let mut o = options("levels-unset", &[("resume", Value::Boolean(false))]);
         assert_eq!(o.here("fast", true), None);
         assert_eq!(
             o.inherited("fast", true),
@@ -509,9 +509,9 @@ mod tests {
         o.unset("fast", true);
         assert_eq!(o.get("fast"), (Value::Integer(6), Source::Console));
         // A flag from the command line stands until the menu changes that option.
-        assert_eq!(o.get("lcd").1, Source::Launch);
-        o.unset("lcd", true);
-        assert_eq!(o.get("lcd"), (Value::Boolean(true), Source::Default));
+        assert_eq!(o.get("resume").1, Source::Launch);
+        o.unset("resume", true);
+        assert_eq!(o.get("resume"), (Value::Boolean(true), Source::Default));
         o.unset("fast", false);
         assert_eq!(o.get("fast").1, Source::Default);
         let again = Settings::load(o.settings.file());
@@ -536,11 +536,16 @@ mod tests {
             Some(Ok((2, Value::from("pocket"))))
         );
         assert!(matches!(look.recognise(&w("--look sepia")), Some(Err(_))));
-        let lcd = SPECS.iter().find(|s| s.key == "lcd").unwrap();
+        let resume = SPECS.iter().find(|s| s.key == "resume").unwrap();
         assert_eq!(
-            lcd.recognise(&w("--no-lcd")),
+            resume.recognise(&w("--no-resume")),
             Some(Ok((1, Value::Boolean(false))))
         );
-        assert_eq!(lcd.recognise(&w("--other")), None);
+        assert_eq!(resume.recognise(&w("--other")), None);
+        let screen = SPECS.iter().find(|s| s.key == "screen").unwrap();
+        assert_eq!(
+            screen.recognise(&w("--screen stripes")),
+            Some(Ok((2, Value::from("stripes"))))
+        );
     }
 }
